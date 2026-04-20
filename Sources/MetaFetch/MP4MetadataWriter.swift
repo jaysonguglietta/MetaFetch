@@ -3,7 +3,7 @@ import CoreMedia
 import Foundation
 
 protocol MetadataWriting: Sendable {
-    func writeMetadata(to fileURL: URL, using result: MovieSearchResult) async throws
+    func writeMetadata(to fileURL: URL, using result: MovieSearchResult, includeArtwork: Bool) async throws
 }
 
 struct MP4MetadataWriter: MetadataWriting {
@@ -27,7 +27,7 @@ struct MP4MetadataWriter: MetadataWriting {
         }
     }
 
-    func writeMetadata(to fileURL: URL, using result: MovieSearchResult) async throws {
+    func writeMetadata(to fileURL: URL, using result: MovieSearchResult, includeArtwork: Bool) async throws {
         let asset = AVURLAsset(url: fileURL)
 
         guard let exportSession = AVAssetExportSession(
@@ -48,7 +48,7 @@ struct MP4MetadataWriter: MetadataWriting {
         exportSession.outputURL = temporaryURL
         exportSession.outputFileType = .mp4
         exportSession.shouldOptimizeForNetworkUse = false
-        exportSession.metadata = try await buildMetadataItems(for: result)
+        exportSession.metadata = try await buildMetadataItems(for: result, includeArtwork: includeArtwork)
 
         try await export(session: exportSession)
 
@@ -60,7 +60,7 @@ struct MP4MetadataWriter: MetadataWriting {
         )
     }
 
-    private func buildMetadataItems(for result: MovieSearchResult) async throws -> [AVMetadataItem] {
+    private func buildMetadataItems(for result: MovieSearchResult, includeArtwork: Bool) async throws -> [AVMetadataItem] {
         var items: [AVMetadataItem] = [
             stringItem(identifier: .commonIdentifierTitle, value: result.trackName),
             stringItem(identifier: .quickTimeUserDataFullName, value: result.trackName),
@@ -88,7 +88,7 @@ struct MP4MetadataWriter: MetadataWriting {
             items.append(dateItem(identifier: .commonIdentifierCreationDate, value: releaseDate))
         }
 
-        if let artworkItem = try await artworkMetadataItem(for: result.artworkURL) {
+        if includeArtwork, let artworkItem = try await artworkMetadataItem(for: result.artworkURL) {
             items.append(artworkItem)
         }
 

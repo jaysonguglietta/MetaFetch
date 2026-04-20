@@ -1,5 +1,22 @@
 import Foundation
 
+enum MatchConfidence: String, Hashable, Sendable {
+    case exact
+    case strong
+    case possible
+
+    var label: String {
+        switch self {
+        case .exact:
+            return "Exact Match"
+        case .strong:
+            return "Strong Match"
+        case .possible:
+            return "Possible Match"
+        }
+    }
+}
+
 struct MovieSearchResult: Hashable, Identifiable, Sendable {
     let trackId: Int
     let trackName: String
@@ -10,6 +27,10 @@ struct MovieSearchResult: Hashable, Identifiable, Sendable {
     let longDescription: String?
     let contentAdvisoryRating: String?
     let artworkUrl100: URL?
+    let sourceName: String
+    let matchConfidence: MatchConfidence
+    let matchSummary: String
+    let matchScore: Int
 
     var id: Int {
         trackId
@@ -57,6 +78,10 @@ struct MovieSearchResult: Hashable, Identifiable, Sendable {
         }
 
         return String(text.prefix(177)) + "..."
+    }
+
+    var hasArtwork: Bool {
+        artworkURL != nil
     }
 }
 
@@ -170,13 +195,12 @@ struct WikimediaMovieSearchService: MovieSearchServing {
             .map { detail in
                 buildResult(
                     from: detail,
-                    imageURLs: imageURLs
+                    imageURLs: imageURLs,
+                    normalizedQuery: normalizedQuery,
+                    expectedYear: expectedYear
                 )
             }
-            .sorted { lhs, rhs in
-                score(lhs, query: normalizedQuery, expectedYear: expectedYear)
-                    > score(rhs, query: normalizedQuery, expectedYear: expectedYear)
-            }
+            .sorted { lhs, rhs in lhs.matchScore > rhs.matchScore }
     }
 
     private func fetchCombinedSearchHits(for query: String) async throws -> [SearchHit] {
@@ -311,7 +335,12 @@ struct WikimediaMovieSearchService: MovieSearchServing {
         return try decoder.decode(Response.self, from: data)
     }
 
-    private func buildResult(from detail: PageDetail, imageURLs: [String: URL]) -> MovieSearchResult {
+    private func buildResult(
+        from detail: PageDetail,
+        imageURLs: [String: URL],
+        normalizedQuery: String,
+        expectedYear: String?
+    ) -> MovieSearchResult {
         let extract = detail.extract?.trimmingCharacters(in: .whitespacesAndNewlines)
         let shortDescription = detail.pageprops?.shortDescription?.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsedYear = extractYear(from: shortDescription) ?? extractYear(from: extract)
@@ -320,7 +349,7 @@ struct WikimediaMovieSearchService: MovieSearchServing {
         let releaseDate = parsedYear.map { "\($0)-01-01T00:00:00Z" }
         let imageURL = detail.pageprops?.pageImage.flatMap { imageURLs[normalizedImageName($0)] }
 
-        return MovieSearchResult(
+        let provisionalResult = MovieSearchResult(
             trackId: detail.pageid ?? detail.title.hashValue,
             trackName: detail.title,
             artistName: parsedDirector,
@@ -329,25 +358,50 @@ struct WikimediaMovieSearchService: MovieSearchServing {
             shortDescription: shortDescription,
             longDescription: extract,
             contentAdvisoryRating: nil,
-            artworkUrl100: imageURL
+            artworkUrl100: imageURL,
+            sourceName: "Wikipedia",
+            matchConfidence: .possible,
+            matchSummary: "Possible movie page match",
+            matchScore: 0
+        )
+
+        let evaluation = evaluateMatch(
+            provisionalResult,
+            normalizedQuery: normalizedQuery,
+            expectedYear: expectedYear
+        )
+
+        return MovieSearchResult(
+            trackId: provisionalResult.trackId,
+            trackName: provisionalResult.trackName,
+            artistName: provisionalResult.artistName,
+            releaseDate: provisionalResult.releaseDate,
+            primaryGenreName: provisionalResult.primaryGenreName,
+            shortDescription: provisionalResult.shortDescription,
+            longDescription: provisionalResult.longDescription,
+            contentAdvisoryRating: provisionalResult.contentAdvisoryRating,
+            artworkUrl100: provisionalResult.artworkUrl100,
+            sourceName: provisionalResult.sourceName,
+            matchConfidence: evaluation.confidence,
+            matchSummary: evaluation.summary,
+            matchScore: evaluation.score
         )
     }
 
-    private func score(_ result: MovieSearchResult, query: String, expectedYear: String?) -> Int {
+    private func evaluateMatch(
+        _ result: MovieSearchResult,
+        normalizedQuery: String,
+        expectedYear: String?
+    ) -> (score: Int, confidence: MatchConfidence, summary: String) {
         let normalizedResultTitle = normalizedTitle(from: result.trackName)
-        let normalizedQueryWithoutYear = normalizedTitle(
-            from: query.replacingOccurrences(
-                of: #"\b(19|20)\d{2}\b"#,
-                with: " ",
-                options: .regularExpression
-            )
-        )
-
         var score = 0
 
-        if normalizedResultTitle == normalizedQueryWithoutYear {
+        let exactTitle = normalizedResultTitle == normalizedQuery
+        let partialTitle = !exactTitle && normalizedResultTitle.contains(normalizedQuery)
+
+        if exactTitle {
             score += 120
-        } else if normalizedResultTitle.contains(normalizedQueryWithoutYear) {
+        } else if partialTitle {
             score += 60
         }
 
@@ -360,24 +414,66 @@ struct WikimediaMovieSearchService: MovieSearchServing {
         .compactMap { $0?.lowercased() }
         .joined(separator: " ")
 
-        if combinedText.contains(" film") {
+        let filmSignals = combinedText.contains(" film")
+            || combinedText.contains(" directed by ")
+            || combinedText.contains(" starring ")
+            || combinedText.contains(" stars ")
+
+        if filmSignals {
             score += 40
         }
 
-        if combinedText.contains("franchise") || combinedText.contains("soundtrack") || combinedText.contains("novel") {
+        let isLikelyNonMovie = combinedText.contains("franchise")
+            || combinedText.contains("soundtrack")
+            || combinedText.contains("novel")
+            || combinedText.contains("video game")
+
+        if isLikelyNonMovie {
             score -= 30
         }
 
+        let yearMatches: Bool
         if let expectedYear,
            result.releaseYear == expectedYear || combinedText.contains(expectedYear) {
             score += 25
+            yearMatches = true
+        } else {
+            yearMatches = false
         }
 
         if let genre = result.primaryGenreName?.lowercased(), genre.contains("film") {
             score += 10
         }
 
-        return score
+        let confidence: MatchConfidence
+        if exactTitle && yearMatches {
+            confidence = .exact
+        } else if exactTitle && score >= 140 {
+            confidence = .exact
+        } else if score >= 95 {
+            confidence = .strong
+        } else {
+            confidence = .possible
+        }
+
+        let summary: String
+        if exactTitle && yearMatches {
+            summary = "Exact title and year match"
+        } else if exactTitle {
+            summary = "Exact title match"
+        } else if partialTitle && yearMatches {
+            summary = "Strong title match with matching year"
+        } else if partialTitle {
+            summary = "Strong title match"
+        } else if yearMatches {
+            summary = "Film page with matching year"
+        } else if filmSignals {
+            summary = "Likely film page from search"
+        } else {
+            summary = "Possible movie page match"
+        }
+
+        return (score, confidence, summary)
     }
 
     private func directTitleCandidates(for query: String) -> [String] {

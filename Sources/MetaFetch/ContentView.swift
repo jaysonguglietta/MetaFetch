@@ -52,10 +52,11 @@ private struct SidebarView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .center, spacing: 12) {
-                    MetaFetchLogoMark(size: 46)
-                    RetroPill(text: "MetaFetch", accent: RetroTheme.cyan)
-                }
+                MetaFetchLogoLockup(
+                    markSize: 52,
+                    wordmarkSize: 28,
+                    subtitle: "metadata search + tagging"
+                )
 
                 Text("Video Store\nMetadata Deck")
                     .font(RetroTheme.heroFont(30))
@@ -226,7 +227,11 @@ private struct EmptyStateView: View {
 
                 VStack(spacing: 14) {
                     VStack(spacing: 12) {
-                        MetaFetchLogoLockup()
+                        MetaFetchLogoLockup(
+                            markSize: 82,
+                            wordmarkSize: 42,
+                            subtitle: "metadata search + tagging"
+                        )
                         RetroPill(text: "1990s Tape Lab", accent: RetroTheme.magenta)
                     }
 
@@ -361,7 +366,7 @@ private struct FileWorkspaceView: View {
                     SearchStatusView(entry: entry)
                 }
                 .padding(22)
-                .retroPanel(accent: RetroTheme.magenta)
+                .retroPanel(accent: RetroTheme.paper.opacity(0.18))
 
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 22) {
@@ -386,6 +391,12 @@ private struct FileWorkspaceView: View {
 
     private var fileHeaderText: some View {
         VStack(alignment: .leading, spacing: 12) {
+            MetaFetchLogoLockup(
+                markSize: 38,
+                wordmarkSize: 24,
+                subtitle: nil
+            )
+
             RetroPill(text: "Now Loading", accent: RetroTheme.cyan)
 
             Text(entry.filename)
@@ -453,7 +464,7 @@ private struct FileWorkspaceView: View {
                 }
                 .padding(20)
                 .frame(maxWidth: .infinity, minHeight: 220, alignment: .topLeading)
-                .retroPanel(accent: RetroTheme.gold)
+                .retroPanel(accent: RetroTheme.paper.opacity(0.18))
             } else {
                 LazyVStack(spacing: 14) {
                     ForEach(entry.searchResults) { result in
@@ -566,7 +577,7 @@ private struct SearchStatusView: View {
                 .foregroundStyle(RetroTheme.paper)
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .retroPanel(accent: RetroTheme.cyan)
+                .retroPanel(accent: RetroTheme.paper.opacity(0.18))
         }
     }
 }
@@ -625,7 +636,7 @@ private struct SearchResultCard: View {
     var body: some View {
         Button(action: select) {
             HStack(alignment: .top, spacing: 16) {
-                ArtworkView(url: result.artworkURL, width: 82, height: 122, accent: isSelected ? RetroTheme.lime : RetroTheme.magenta)
+                ArtworkView(url: result.artworkURL, width: 82, height: 122, accent: isSelected ? RetroTheme.lime : RetroTheme.paper.opacity(0.24))
 
                 VStack(alignment: .leading, spacing: 10) {
                     ViewThatFits(in: .horizontal) {
@@ -648,6 +659,16 @@ private struct SearchResultCard: View {
                         }
                     }
 
+                    HStack(spacing: 8) {
+                        MatchConfidenceBadge(confidence: result.matchConfidence)
+                        InfoBadge(text: result.sourceName, accent: RetroTheme.paper.opacity(0.18), foreground: RetroTheme.paper)
+                    }
+
+                    Text(result.matchSummary)
+                        .font(RetroTheme.labelFont(12))
+                        .tracking(1.1)
+                        .foregroundStyle(result.matchConfidence.accent)
+
                     Text(result.synopsisPreview)
                         .font(RetroTheme.bodyFont(15))
                         .foregroundStyle(RetroTheme.muted)
@@ -657,7 +678,7 @@ private struct SearchResultCard: View {
             }
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .retroPanel(accent: isSelected ? RetroTheme.lime : RetroTheme.magenta)
+            .retroPanel(accent: isSelected ? RetroTheme.lime : RetroTheme.paper.opacity(0.14))
         }
         .buttonStyle(.plain)
     }
@@ -714,10 +735,21 @@ private struct SelectionPreviewCard: View {
                         .lineLimit(10)
                 }
 
+                HStack(spacing: 8) {
+                    MatchConfidenceBadge(confidence: match.matchConfidence)
+                    InfoBadge(text: match.sourceName, accent: RetroTheme.paper.opacity(0.18), foreground: RetroTheme.paper)
+                }
+
+                Text(match.matchSummary)
+                    .font(RetroTheme.bodyFont(14))
+                    .foregroundStyle(match.matchConfidence.accent)
+
                 Divider()
                     .overlay(RetroTheme.paper.opacity(0.16))
 
                 VStack(alignment: .leading, spacing: 9) {
+                    MetadataLine(label: "Match", value: match.matchSummary)
+                    MetadataLine(label: "Source", value: match.sourceName)
                     MetadataLine(label: "Title", value: match.trackName)
                     MetadataLine(label: "Genre", value: match.primaryGenreName ?? "Not provided")
                     MetadataLine(label: "Year", value: match.releaseYear ?? "Not provided")
@@ -725,15 +757,46 @@ private struct SelectionPreviewCard: View {
                     MetadataLine(label: "Artwork", value: match.artworkURL == nil ? "None" : "Included")
                 }
 
+                if match.hasArtwork {
+                    Toggle(isOn: $entry.includeArtworkWhenSaving) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Include Poster Artwork")
+                                .font(RetroTheme.labelFont(13))
+                                .foregroundStyle(RetroTheme.paper)
+
+                            Text(entry.saveModeSummary)
+                                .font(RetroTheme.bodyFont(12))
+                                .foregroundStyle(RetroTheme.muted)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .tint(RetroTheme.lime)
+                } else {
+                    Text(entry.saveModeSummary)
+                        .font(RetroTheme.bodyFont(12))
+                        .foregroundStyle(RetroTheme.muted)
+                }
+
                 Button(action: saveAction) {
                     if entry.isSaving {
                         Label("Saving Metadata...", systemImage: "arrow.trianglehead.2.clockwise")
                     } else {
-                        Label("Save Metadata To MP4", systemImage: "square.and.arrow.down")
+                        Label(entry.saveActionLabel, systemImage: "square.and.arrow.down")
                     }
                 }
                 .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.lime))
                 .disabled(!entry.canSave)
+
+                if entry.isSaving {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                            .tint(RetroTheme.lime)
+
+                        Text(entry.statusMessage)
+                            .font(RetroTheme.bodyFont(13))
+                            .foregroundStyle(RetroTheme.paper)
+                    }
+                }
 
                 if let lastSavedAt = entry.lastSavedAt {
                     Text("Stamped at \(lastSavedAt.formatted(date: .omitted, time: .shortened))")
@@ -743,7 +806,7 @@ private struct SelectionPreviewCard: View {
                 }
             } else {
                 VStack(alignment: .leading, spacing: 10) {
-                    RetroPill(text: "Pick A Match", accent: RetroTheme.magenta)
+                    RetroPill(text: "Review Needed", accent: RetroTheme.magenta)
 
                     Text("Choose one of the movie cards on the left to preview the metadata that will get written into the MP4.")
                         .font(RetroTheme.bodyFont(15))
@@ -754,6 +817,33 @@ private struct SelectionPreviewCard: View {
         }
         .padding(20)
         .retroPanel(accent: RetroTheme.lime)
+    }
+}
+
+private struct MatchConfidenceBadge: View {
+    let confidence: MatchConfidence
+
+    var body: some View {
+        InfoBadge(text: confidence.label, accent: confidence.accent, foreground: RetroTheme.ink)
+    }
+}
+
+private struct InfoBadge: View {
+    let text: String
+    let accent: Color
+    let foreground: Color
+
+    var body: some View {
+        Text(text.uppercased())
+            .font(RetroTheme.labelFont(10))
+            .tracking(1.8)
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(accent)
+            )
     }
 }
 
@@ -826,6 +916,19 @@ private struct ArtworkView: View {
                     .tracking(2.2)
                     .foregroundStyle(RetroTheme.paper.opacity(0.8))
             }
+        }
+    }
+}
+
+private extension MatchConfidence {
+    var accent: Color {
+        switch self {
+        case .exact:
+            return RetroTheme.lime
+        case .strong:
+            return RetroTheme.gold
+        case .possible:
+            return RetroTheme.paper.opacity(0.28)
         }
     }
 }

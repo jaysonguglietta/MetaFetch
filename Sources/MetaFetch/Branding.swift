@@ -87,20 +87,55 @@ struct MetaFetchLogoMark: View {
     }
 }
 
-struct MetaFetchLogoLockup: View {
+struct MetaFetchWordmark: View {
+    let size: CGFloat
+    var subtitle: String? = "metadata search + tagging"
+
     var body: some View {
-        HStack(spacing: 14) {
-            MetaFetchLogoMark(size: 68)
+        VStack(alignment: .leading, spacing: max(4, size * 0.09)) {
+            Text("MetaFetch")
+                .font(.custom("Futura-CondensedExtraBold", size: size))
+                .tracking(size * 0.015)
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [RetroTheme.paper, Color.white, RetroTheme.cyan.opacity(0.92)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .shadow(color: RetroTheme.cyan.opacity(0.22), radius: size * 0.12, x: 0, y: size * 0.08)
+                .overlay(alignment: .bottomLeading) {
+                    Capsule(style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [RetroTheme.cyan, RetroTheme.gold],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: size * 0.92, height: max(3, size * 0.065))
+                        .offset(y: size * 0.16)
+                }
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("MetaFetch")
-                    .font(.custom("AvenirNextCondensed-Heavy", size: 30))
-                    .foregroundStyle(RetroTheme.paper)
-
-                Text("metadata search + tagging")
-                    .font(.custom("Helvetica Neue", size: 14))
+            if let subtitle {
+                Text(subtitle.uppercased())
+                    .font(.custom("AvenirNextCondensed-DemiBold", size: size * 0.32))
+                    .tracking(size * 0.09)
                     .foregroundStyle(RetroTheme.muted)
             }
+        }
+    }
+}
+
+struct MetaFetchLogoLockup: View {
+    var markSize: CGFloat = 68
+    var wordmarkSize: CGFloat = 30
+    var subtitle: String? = "metadata search + tagging"
+
+    var body: some View {
+        HStack(spacing: 14) {
+            MetaFetchLogoMark(size: markSize)
+            MetaFetchWordmark(size: wordmarkSize, subtitle: subtitle)
         }
     }
 }

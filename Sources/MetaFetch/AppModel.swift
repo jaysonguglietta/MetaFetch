@@ -1,6 +1,28 @@
 import Foundation
 import SwiftUI
 
+enum SearchSelectionPolicy {
+    static func suggestedAutoSelection(from results: [MovieSearchResult]) -> MovieSearchResult? {
+        guard let topResult = results.first else {
+            return nil
+        }
+
+        guard topResult.matchConfidence == .exact else {
+            return nil
+        }
+
+        guard let runnerUp = results.dropFirst().first else {
+            return topResult
+        }
+
+        guard topResult.matchScore - runnerUp.matchScore >= 30 else {
+            return nil
+        }
+
+        return topResult
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var files: [MovieFileEntry] = []
@@ -95,15 +117,32 @@ final class AppModel: ObservableObject {
 
         do {
             let results = try await searchService.searchMovies(matching: query)
+            let previousSelectionID = file.selectedResult?.id
+            let preservedSelection: MovieSearchResult?
             file.searchResults = results
-            file.selectedResult = results.first
             file.isSearching = false
+
+            if let previousSelectionID,
+               let refreshedSelection = results.first(where: { $0.id == previousSelectionID }) {
+                file.selectedResult = refreshedSelection
+                preservedSelection = refreshedSelection
+            } else {
+                file.selectedResult = SearchSelectionPolicy.suggestedAutoSelection(from: results)
+                preservedSelection = nil
+            }
 
             if results.isEmpty {
                 file.statusMessage = "No matches found yet"
                 file.errorMessage = "No movie matches came back. Try removing the year or shortening the title."
             } else {
-                file.statusMessage = "Found \(results.count) possible match\(results.count == 1 ? "" : "es")"
+                if preservedSelection != nil {
+                    file.statusMessage = "Kept your selected match while refreshing \(results.count) result\(results.count == 1 ? "" : "s")"
+                } else if let selectedResult = file.selectedResult,
+                          selectedResult.matchConfidence == .exact {
+                    file.statusMessage = "Auto-selected a high-confidence match from \(results.count) result\(results.count == 1 ? "" : "s")"
+                } else {
+                    file.statusMessage = "Found \(results.count) possible match\(results.count == 1 ? "" : "es"). Pick the best one."
+                }
 
                 let artworkURLs = results
                     .prefix(6)
@@ -124,15 +163,31 @@ final class AppModel: ObservableObject {
             return
         }
 
+        let includeArtwork = file.willSaveArtwork
         file.isSaving = true
         file.errorMessage = nil
-        file.statusMessage = "Writing metadata back to \(file.filename)"
+        file.statusMessage = includeArtwork
+            ? "Preparing poster artwork and metadata"
+            : "Preparing fast metadata save"
 
         do {
-            try await metadataWriter.writeMetadata(to: file.fileURL, using: selectedResult)
+            if includeArtwork && selectedResult.artworkURL != nil {
+                _ = try await ArtworkPipeline.shared.preparedArtwork(for: selectedResult.artworkURL)
+            }
+
+            file.statusMessage = includeArtwork
+                ? "Rewriting MP4 with metadata and poster artwork"
+                : "Rewriting MP4 with metadata only"
+
+            try await metadataWriter.writeMetadata(
+                to: file.fileURL,
+                using: selectedResult,
+                includeArtwork: includeArtwork
+            )
             file.lastSavedAt = Date()
             file.isSaving = false
             file.statusMessage = "Saved metadata at \(file.lastSavedAt?.formatted(date: .omitted, time: .shortened) ?? "just now")"
+            advanceSelection(afterSaving: file)
         } catch {
             file.isSaving = false
             file.statusMessage = "Save failed"
@@ -143,6 +198,20 @@ final class AppModel: ObservableObject {
     func saveAllTaggedFiles() async {
         for entry in files where entry.selectedResult != nil && !entry.isSaving {
             await save(file: entry)
+        }
+    }
+
+    private func advanceSelection(afterSaving savedFile: MovieFileEntry) {
+        guard let currentIndex = files.firstIndex(where: { $0.id == savedFile.id }) else {
+            return
+        }
+
+        let trailingFiles = files.suffix(from: files.index(after: currentIndex))
+        let leadingFiles = files.prefix(upTo: currentIndex)
+
+        if let nextFile = trailingFiles.first(where: { $0.lastSavedAt == nil }) ??
+            leadingFiles.first(where: { $0.lastSavedAt == nil }) {
+            selectedFileID = nextFile.id
         }
     }
 }
