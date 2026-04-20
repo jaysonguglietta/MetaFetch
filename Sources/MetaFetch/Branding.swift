@@ -8,7 +8,7 @@ struct MetaFetchLogoMark: View {
             RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
                 .fill(
                     LinearGradient(
-                        colors: [Color(red: 0.07, green: 0.09, blue: 0.18), Color(red: 0.15, green: 0.10, blue: 0.28)],
+                        colors: [Color(red: 0.07, green: 0.11, blue: 0.22), Color(red: 0.10, green: 0.16, blue: 0.30)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
@@ -17,39 +17,73 @@ struct MetaFetchLogoMark: View {
             RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
                 .strokeBorder(RetroTheme.paper.opacity(0.18), lineWidth: size * 0.025)
 
-            RoundedRectangle(cornerRadius: size * 0.18, style: .continuous)
-                .inset(by: size * 0.12)
-                .strokeBorder(RetroTheme.cyan.opacity(0.92), lineWidth: size * 0.06)
+            RoundedRectangle(cornerRadius: size * 0.11, style: .continuous)
+                .fill(Color.white.opacity(0.16))
+                .frame(width: size * 0.28, height: size * 0.30)
+                .offset(x: size * 0.22, y: size * 0.06)
 
-            HStack(spacing: size * 0.08) {
-                VStack(alignment: .leading, spacing: size * 0.08) {
-                    Capsule(style: .continuous)
-                        .fill(RetroTheme.cyan)
-                        .frame(width: size * 0.16, height: size * 0.07)
+            folderOutline
+                .frame(width: size * 0.72, height: size * 0.54)
+                .offset(y: size * 0.06)
 
-                    Capsule(style: .continuous)
-                        .fill(RetroTheme.magenta)
-                        .frame(width: size * 0.22, height: size * 0.07)
+            ZStack {
+                Circle()
+                    .fill(RetroTheme.cyan)
+                    .frame(width: size * 0.42, height: size * 0.42)
 
-                    Capsule(style: .continuous)
-                        .fill(RetroTheme.gold)
-                        .frame(width: size * 0.12, height: size * 0.07)
-                }
+                Circle()
+                    .strokeBorder(RetroTheme.paper, lineWidth: size * 0.07)
+                    .frame(width: size * 0.42, height: size * 0.42)
 
-                ZStack {
-                    RoundedRectangle(cornerRadius: size * 0.09, style: .continuous)
-                        .fill(RetroTheme.gold)
-                        .frame(width: size * 0.16, height: size * 0.40)
+                Circle()
+                    .fill(Color.white.opacity(0.78))
+                    .frame(width: size * 0.07, height: size * 0.07)
+                    .offset(x: -size * 0.08, y: -size * 0.08)
 
-                    Image(systemName: "arrow.down.right")
-                        .font(.system(size: size * 0.22, weight: .black))
-                        .foregroundStyle(RetroTheme.ink)
-                }
+                RoundedRectangle(cornerRadius: size * 0.03, style: .continuous)
+                    .fill(RetroTheme.paper)
+                    .frame(width: size * 0.24, height: size * 0.07)
+                    .rotationEffect(.degrees(-42))
+                    .offset(x: -size * 0.19, y: size * 0.18)
             }
-            .offset(y: size * 0.02)
+            .offset(y: size * 0.03)
+
+            Circle()
+                .fill(RetroTheme.peach)
+                .frame(width: size * 0.10, height: size * 0.10)
+                .overlay(
+                    Circle()
+                        .strokeBorder(RetroTheme.paper.opacity(0.4), lineWidth: size * 0.015)
+                )
+                .offset(x: size * 0.26, y: -size * 0.24)
         }
         .frame(width: size, height: size)
         .shadow(color: RetroTheme.cyan.opacity(0.18), radius: size * 0.18, x: 0, y: size * 0.12)
+    }
+
+    private var folderOutline: some View {
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: size * 0.09, style: .continuous)
+                .strokeBorder(RetroTheme.paper, lineWidth: size * 0.05)
+                .frame(width: size * 0.72, height: size * 0.40)
+                .offset(y: size * 0.09)
+
+            RoundedRectangle(cornerRadius: size * 0.05, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.94), Color.white.opacity(0.76)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: size * 0.20, height: size * 0.09)
+                .offset(x: size * 0.06, y: size * 0.02)
+
+            Rectangle()
+                .fill(Color.white.opacity(0.95))
+                .frame(width: size * 0.60, height: size * 0.05)
+                .offset(x: size * 0.02, y: size * 0.20)
+        }
     }
 }
 
@@ -60,10 +94,10 @@ struct MetaFetchLogoLockup: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("MetaFetch")
-                    .font(.custom("AvenirNextCondensed-Heavy", size: 32))
+                    .font(.custom("AvenirNextCondensed-Heavy", size: 30))
                     .foregroundStyle(RetroTheme.paper)
 
-                Text("movie metadata fetch + stamp")
+                Text("metadata search + tagging")
                     .font(.custom("Helvetica Neue", size: 14))
                     .foregroundStyle(RetroTheme.muted)
             }
