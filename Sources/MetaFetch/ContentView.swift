@@ -3,18 +3,28 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var model = AppModel()
+    @State private var isSidebarVisible = true
 
     var body: some View {
         ZStack {
             RetroBackdrop()
 
-            NavigationSplitView {
-                SidebarView(model: model)
-                    .navigationSplitViewColumnWidth(min: 290, ideal: 330)
-            } detail: {
+            HStack(spacing: 0) {
+                if isSidebarVisible {
+                    SidebarView(model: model)
+                        .frame(width: 330)
+                        .transition(.identity)
+
+                    Rectangle()
+                        .fill(RetroTheme.paper.opacity(0.08))
+                        .frame(width: 1)
+                }
+
                 DetailView(model: model)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .background(.clear)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .preferredColorScheme(.dark)
         .fileImporter(
@@ -31,6 +41,11 @@ struct ContentView: View {
         }
         .toolbar {
             ToolbarItemGroup {
+                Button(isSidebarVisible ? "Hide Sidebar" : "Show Sidebar", systemImage: "sidebar.left") {
+                    isSidebarVisible.toggle()
+                }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+
                 Button("Add MP4 Files", systemImage: "plus") {
                     model.isFileImporterPresented = true
                 }
@@ -52,11 +67,7 @@ private struct SidebarView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 12) {
-                MetaFetchLogoLockup(
-                    markSize: 52,
-                    wordmarkSize: 28,
-                    subtitle: "metadata search + tagging"
-                )
+                MetaFetchSidebarBrand()
 
                 Text("Video Store\nMetadata Deck")
                     .font(RetroTheme.heroFont(30))
@@ -94,6 +105,7 @@ private struct SidebarView: View {
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
             .background(.clear)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if model.files.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
@@ -108,6 +120,7 @@ private struct SidebarView: View {
             }
         }
         .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

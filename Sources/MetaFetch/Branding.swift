@@ -93,29 +93,30 @@ struct MetaFetchWordmark: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: max(4, size * 0.09)) {
-            Text("MetaFetch")
-                .font(.custom("Futura-CondensedExtraBold", size: size))
-                .tracking(size * 0.015)
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [RetroTheme.paper, Color.white, RetroTheme.cyan.opacity(0.92)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .shadow(color: RetroTheme.cyan.opacity(0.22), radius: size * 0.12, x: 0, y: size * 0.08)
-                .overlay(alignment: .bottomLeading) {
-                    Capsule(style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [RetroTheme.cyan, RetroTheme.gold],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
+            VStack(alignment: .leading, spacing: max(3, size * 0.06)) {
+                Text("MetaFetch")
+                    .font(.custom("Futura-CondensedExtraBold", size: size))
+                    .tracking(size * 0.015)
+                    .lineLimit(1)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [RetroTheme.paper, Color.white, RetroTheme.cyan.opacity(0.92)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
                         )
-                        .frame(width: size * 0.92, height: max(3, size * 0.065))
-                        .offset(y: size * 0.16)
-                }
+                    )
+                    .shadow(color: RetroTheme.cyan.opacity(0.22), radius: size * 0.12, x: 0, y: size * 0.08)
+
+                Capsule(style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [RetroTheme.cyan, RetroTheme.gold],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: size * 0.92, height: max(3, size * 0.065))
+            }
 
             if let subtitle {
                 Text(subtitle.uppercased())
@@ -124,6 +125,7 @@ struct MetaFetchWordmark: View {
                     .foregroundStyle(RetroTheme.muted)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -133,9 +135,26 @@ struct MetaFetchLogoLockup: View {
     var subtitle: String? = "metadata search + tagging"
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(alignment: .center, spacing: 14) {
             MetaFetchLogoMark(size: markSize)
             MetaFetchWordmark(size: wordmarkSize, subtitle: subtitle)
+                .layoutPriority(1)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct MetaFetchSidebarBrand: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            MetaFetchLogoLockup(
+                markSize: 44,
+                wordmarkSize: 24,
+                subtitle: nil
+            )
+
+            RetroPill(text: "Metadata Deck", accent: RetroTheme.cyan)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
