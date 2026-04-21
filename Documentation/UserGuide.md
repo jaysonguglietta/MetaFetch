@@ -2,6 +2,8 @@
 
 MetaFetch tags MP4 files with movie or TV episode metadata. It does not delete your files. When saving, it updates metadata in place when possible or writes a tagged replacement copy through AVFoundation when needed.
 
+Before writing metadata, MetaFetch creates a safety backup next to the original file. Backup files use the pattern `Movie.metafetch-backup-<id>.mp4`.
+
 ## Choose A Deck
 
 When MetaFetch opens, choose one mode:
@@ -97,7 +99,7 @@ Use the `Help` toolbar button for a quick version of this guide inside MetaFetch
 - If the sidebar is hidden, use `Hide Sidebar` / `Show Sidebar` in the toolbar.
 - If saving is slow, turn off poster artwork and use `Fast Save Metadata`.
 - If the app feels stuck on a bad batch, use `Start Over` to clear the queue and choose a mode again.
-- If you are tagging important originals, keep a backup copy until you are comfortable with the save path.
+- If you are low on disk space, clear old `.metafetch-backup-*` files after confirming the tagged MP4s look right.
 
 ## Feature Suggestions
 

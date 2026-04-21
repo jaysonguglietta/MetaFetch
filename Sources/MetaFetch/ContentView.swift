@@ -1261,7 +1261,7 @@ private struct HelpView: View {
                         title: "Good Next Upgrades",
                         accent: RetroTheme.gold,
                         rows: [
-                            "Backup-before-save would make experiments safer when tagging rare files.",
+                            "Backup cleanup preferences would help manage the safety copies MetaFetch now creates before saving.",
                             "A manual metadata editor would let you tweak title, synopsis, genre, and artwork before saving.",
                             "Batch folder scanning could auto-group shows by series and season.",
                             "A save report could list which files used fast metadata saves versus full MP4 rewrites.",

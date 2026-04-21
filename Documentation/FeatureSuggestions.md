@@ -4,7 +4,7 @@ This is a practical roadmap for turning MetaFetch from a fast tagging utility in
 
 ## Highest Value
 
-- Backup-before-save: Offer a checkbox to create a `.bak.mp4` copy before the first write to a file.
+- Backup management: Add preferences for where safety backups are stored, how long they are kept, and whether old backups should be cleaned automatically.
 - Manual metadata editor: Let users tweak title, sort title, synopsis, genre, release date, artwork, season, and episode before saving.
 - Save report: After `Save All Tagged`, show which files saved, failed, used fast metadata-only writes, or needed full MP4 rewrites.
 - Batch folder import: Let users drop a season folder and automatically detect show, season, and episode from folder context.

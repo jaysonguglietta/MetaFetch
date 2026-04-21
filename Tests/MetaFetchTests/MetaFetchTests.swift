@@ -134,6 +134,29 @@ import Testing
     #expect(selection == nil)
 }
 
+@Test func importValidatorRequiresWritableRegularMP4Files() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("MetaFetchTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    let validMP4 = directory.appendingPathComponent("Movie.mp4")
+    FileManager.default.createFile(atPath: validMP4.path, contents: Data([0x00]))
+
+    let wrongExtension = directory.appendingPathComponent("Movie.mov")
+    FileManager.default.createFile(atPath: wrongExtension.path, contents: Data([0x00]))
+
+    let symlink = directory.appendingPathComponent("Linked.mp4")
+    try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: validMP4)
+
+    #expect(MediaFileImportValidator.validatedImportURL(validMP4) != nil)
+    #expect(MediaFileImportValidator.validatedImportURL(wrongExtension) == nil)
+    #expect(MediaFileImportValidator.validatedImportURL(symlink) == nil)
+    #expect(MediaFileImportValidator.validatedImportURL(URL(string: "https://example.com/movie.mp4")!) == nil)
+}
+
 private func makeResult(
     id: Int,
     title: String,

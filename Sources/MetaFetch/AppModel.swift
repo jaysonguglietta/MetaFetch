@@ -91,17 +91,16 @@ final class AppModel: ObservableObject {
         }
 
         let validURLs = urls
-            .map(\.standardizedFileURL)
-            .filter { $0.pathExtension.caseInsensitiveCompare("mp4") == .orderedSame }
+            .compactMap(MediaFileImportValidator.validatedImportURL)
 
         guard !validURLs.isEmpty else {
-            noticeMessage = "Only `.mp4` files are accepted right now."
+            noticeMessage = "Only local, writable `.mp4` files are accepted right now."
             return
         }
 
-        let existingPaths = Set(files.map { $0.fileURL.standardizedFileURL.path })
+        var knownPaths = Set(files.map { $0.fileURL.standardizedFileURL.path })
         let newEntries = validURLs.compactMap { url -> MovieFileEntry? in
-            guard !existingPaths.contains(url.path) else {
+            guard knownPaths.insert(url.path).inserted else {
                 return nil
             }
 
@@ -281,5 +280,27 @@ final class AppModel: ObservableObject {
         case .tvShow:
             return "Searching TV matches for “\(query)”"
         }
+    }
+}
+
+enum MediaFileImportValidator {
+    static func validatedImportURL(_ url: URL) -> URL? {
+        let standardizedURL = url.standardizedFileURL
+        guard standardizedURL.isFileURL,
+              standardizedURL.pathExtension.caseInsensitiveCompare("mp4") == .orderedSame,
+              let resourceValues = try? standardizedURL.resourceValues(forKeys: [
+                .isReadableKey,
+                .isRegularFileKey,
+                .isSymbolicLinkKey,
+                .isWritableKey,
+              ]),
+              resourceValues.isRegularFile == true,
+              resourceValues.isReadable == true,
+              resourceValues.isWritable == true,
+              resourceValues.isSymbolicLink != true else {
+            return nil
+        }
+
+        return standardizedURL
     }
 }
