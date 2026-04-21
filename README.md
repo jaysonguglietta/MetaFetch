@@ -1,33 +1,35 @@
 # MetaFetch
 
-MetaFetch is a native macOS SwiftUI app for tagging `.mp4` movie files with metadata fetched from an online movie search.
+MetaFetch is a native macOS SwiftUI app for tagging `.mp4` files with movie or TV episode metadata.
 
-## What it does
+## Features
 
-- Accepts `.mp4` files via drag and drop or the system file picker.
-- Guesses a search title from the filename, while still letting you edit the title manually.
-- Searches Wikipedia/Wikimedia movie pages with no API key required.
-- Shows the best matches so you can pick the correct movie.
-- Writes title, description, genre, creator, release date, and poster art back into the MP4.
+- Choose `Movie` or `TV Show` when the app starts.
+- Drag and drop one or more `.mp4` files, or use the file picker.
+- Clean filenames into searchable titles automatically.
+- Detect TV episode codes like `S01E03` and `2x07`.
+- Use folder context for TV files like `Severance/Season 2/Episode 04.mp4`.
+- Review match confidence, result source, and source page links before saving.
+- Write title, synopsis, genre, artwork, and movie or episode-specific metadata back to the MP4.
+- Use a fast metadata-only save path when artwork is off and the file supports it.
 
-## Run it
+## Run
 
-Open the package in Xcode and run the `MetaFetch` target, or launch it from Terminal:
-
-```bash
-swift run
-```
-
-If you want to launch it as a real macOS `.app` bundle with a bundle identifier, use:
+Open the package in Xcode and run the `MetaFetch` target, or launch the bundled app:
 
 ```bash
 ./Scripts/run_app.sh
 ```
 
-That path avoids the AppKit warning about a missing main bundle identifier that can appear when `swift run` launches the bare executable directly.
+That path builds and opens a real `.app` bundle with the bundle identifier `com.jaysonguglietta.metafetch`.
 
-## Notes
+## Documentation
 
-- The first version is focused on `.mp4` files only.
-- Metadata search currently uses Wikimedia data, so match quality depends on Wikipedia page coverage and page images.
-- Saving rewrites the original file through AVFoundation using a passthrough export, then replaces the original only after the export succeeds.
+See [User Guide](Documentation/UserGuide.md) for the full workflow, naming tips, save behavior, and troubleshooting.
+
+## Data Sources
+
+- Movies use Wikipedia/Wikimedia metadata and page images.
+- TV shows and episodes use TVMaze metadata.
+
+Match quality depends on source coverage. Always review close matches before saving.

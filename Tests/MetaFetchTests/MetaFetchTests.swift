@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import MetaFetch
 
@@ -7,7 +8,8 @@ import Testing
 
 @Test func stripsReleaseNoiseAndKeepsYear() async throws {
     let query = FilenameTitleParser.suggestedQuery(
-        from: "The.Matrix.1999.1080p.BluRay.x264.mp4"
+        from: "The.Matrix.1999.1080p.BluRay.x264.mp4",
+        mode: .movie
     )
 
     #expect(query == "The Matrix 1999")
@@ -15,18 +17,52 @@ import Testing
 
 @Test func removesBracketedJunkAndPreservesMeaningfulWords() async throws {
     let query = FilenameTitleParser.suggestedQuery(
-        from: "[YTS] Mad.Max.Fury.Road.(2015).WEB-DL.H264.mp4"
+        from: "[YTS] Mad.Max.Fury.Road.(2015).WEB-DL.H264.mp4",
+        mode: .movie
     )
 
     #expect(query == "Mad Max Fury Road 2015")
 }
 
-@Test func stopsAtEpisodeMarkers() async throws {
+@Test func movieModeStopsAtEpisodeMarkers() async throws {
     let query = FilenameTitleParser.suggestedQuery(
-        from: "Some.Show.S01E03.1080p.WEBRip.mp4"
+        from: "Some.Show.S01E03.1080p.WEBRip.mp4",
+        mode: .movie
     )
 
     #expect(query == "Some Show")
+}
+
+@Test func tvModePreservesEpisodeMarkers() async throws {
+    let query = FilenameTitleParser.suggestedQuery(
+        from: "Some.Show.S01E03.1080p.WEBRip.mp4",
+        mode: .tvShow
+    )
+
+    #expect(query == "Some Show S01E03")
+}
+
+@Test func tvModeNormalizesAlternateEpisodeNotation() async throws {
+    let query = FilenameTitleParser.suggestedQuery(
+        from: "Severance.2x07.2160p.WEB-DL.mp4",
+        mode: .tvShow
+    )
+
+    #expect(query == "Severance S02E07")
+}
+
+@Test func tvModeUsesFolderContextForGenericEpisodeFilenames() async throws {
+    let url = URL(fileURLWithPath: "/Shows/Severance/Season 2/Episode 04.mp4")
+    let query = FilenameTitleParser.suggestedQuery(fromFileURL: url, mode: .tvShow)
+
+    #expect(query == "Severance S02E04")
+}
+
+@Test func tvModeUsesCombinedFolderSeasonName() async throws {
+    let url = URL(fileURLWithPath: "/Shows/Severance Season 2/E04.mp4")
+    let query = FilenameTitleParser.suggestedQuery(fromFileURL: url, mode: .tvShow)
+
+    #expect(query == "Severance S02E04")
 }
 
 @Test func autoSelectsOnlyClearExactMatch() async throws {
@@ -34,7 +70,7 @@ import Testing
         id: 1,
         title: "The Matrix",
         year: "1999",
-        confidence: .exact,
+        confidence: MatchConfidence.exact,
         summary: "Exact title and year match",
         score: 185
     )
@@ -42,7 +78,7 @@ import Testing
         id: 2,
         title: "The Matrix Reloaded",
         year: "2003",
-        confidence: .strong,
+        confidence: MatchConfidence.strong,
         summary: "Strong title match",
         score: 120
     )
@@ -57,7 +93,7 @@ import Testing
         id: 1,
         title: "Heat",
         year: "1995",
-        confidence: .strong,
+        confidence: MatchConfidence.strong,
         summary: "Strong title match with matching year",
         score: 120
     )
@@ -65,7 +101,7 @@ import Testing
         id: 2,
         title: "Heat Wave",
         year: "1990",
-        confidence: .possible,
+        confidence: MatchConfidence.possible,
         summary: "Possible movie page match",
         score: 60
     )
@@ -80,7 +116,7 @@ import Testing
         id: 1,
         title: "Crash",
         year: "2004",
-        confidence: .exact,
+        confidence: MatchConfidence.exact,
         summary: "Exact title and year match",
         score: 145
     )
@@ -88,7 +124,7 @@ import Testing
         id: 2,
         title: "Crash",
         year: "1996",
-        confidence: .strong,
+        confidence: MatchConfidence.strong,
         summary: "Exact title match",
         score: 122
     )
@@ -105,20 +141,25 @@ private func makeResult(
     confidence: MatchConfidence,
     summary: String,
     score: Int
-) -> MovieSearchResult {
-    MovieSearchResult(
+) -> MediaSearchResult {
+    MediaSearchResult(
         trackId: id,
+        mediaKind: .movie,
         trackName: title,
+        seriesName: nil,
         artistName: "Test Director",
         releaseDate: "\(year)-01-01T00:00:00Z",
         primaryGenreName: "Science fiction film",
         shortDescription: "Test film",
         longDescription: "Test film directed by Test Director.",
         contentAdvisoryRating: nil,
-        artworkUrl100: nil,
+        artworkURL: nil,
+        sourceURL: nil,
         sourceName: "Wikipedia",
         matchConfidence: confidence,
         matchSummary: summary,
-        matchScore: score
+        matchScore: score,
+        seasonNumber: nil,
+        episodeNumber: nil
     )
 }

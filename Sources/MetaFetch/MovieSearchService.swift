@@ -17,20 +17,25 @@ enum MatchConfidence: String, Hashable, Sendable {
     }
 }
 
-struct MovieSearchResult: Hashable, Identifiable, Sendable {
+struct MediaSearchResult: Hashable, Identifiable, Sendable {
     let trackId: Int
+    let mediaKind: MediaSearchKind
     let trackName: String
+    let seriesName: String?
     let artistName: String?
     let releaseDate: String?
     let primaryGenreName: String?
     let shortDescription: String?
     let longDescription: String?
     let contentAdvisoryRating: String?
-    let artworkUrl100: URL?
+    let artworkURL: URL?
+    let sourceURL: URL?
     let sourceName: String
     let matchConfidence: MatchConfidence
     let matchSummary: String
     let matchScore: Int
+    let seasonNumber: Int?
+    let episodeNumber: Int?
 
     var id: Int {
         trackId
@@ -52,23 +57,29 @@ struct MovieSearchResult: Hashable, Identifiable, Sendable {
         return preferred ?? "No synopsis was returned for this title."
     }
 
-    var artworkURL: URL? {
-        guard let artworkUrl100 else {
+    var subtitleLine: String {
+        switch mediaKind {
+        case .movie:
+            return [releaseYear, primaryGenreName, artistName]
+                .compactMap { $0?.trimmedNilIfBlank }
+                .joined(separator: " • ")
+        case .tvEpisode:
+            return [seriesName, seasonEpisodeLabel, releaseYear]
+                .compactMap { $0?.trimmedNilIfBlank }
+                .joined(separator: " • ")
+        case .tvSeries:
+            return [releaseYear, primaryGenreName, artistName]
+                .compactMap { $0?.trimmedNilIfBlank }
+                .joined(separator: " • ")
+        }
+    }
+
+    var seasonEpisodeLabel: String? {
+        guard let seasonNumber, let episodeNumber else {
             return nil
         }
 
-        let upgraded = artworkUrl100.absoluteString.replacingOccurrences(
-            of: "100x100bb",
-            with: "600x600bb"
-        )
-
-        return URL(string: upgraded) ?? artworkUrl100
-    }
-
-    var subtitleLine: String {
-        [releaseYear, primaryGenreName, artistName]
-            .compactMap { $0?.nilIfBlank }
-            .joined(separator: " • ")
+        return String(format: "S%02dE%02d", seasonNumber, episodeNumber)
     }
 
     var synopsisPreview: String {
@@ -83,13 +94,40 @@ struct MovieSearchResult: Hashable, Identifiable, Sendable {
     var hasArtwork: Bool {
         artworkURL != nil
     }
+
+    var creatorValue: String? {
+        artistName.trimmedNilIfBlank
+    }
+
+    var creatorLabel: String {
+        switch mediaKind {
+        case .movie:
+            return "Director"
+        case .tvEpisode, .tvSeries:
+            return "Network"
+        }
+    }
 }
 
-protocol MovieSearchServing: Sendable {
-    func searchMovies(matching query: String) async throws -> [MovieSearchResult]
+protocol MediaSearchServing: Sendable {
+    func search(matching query: String, mode: MediaLibraryMode) async throws -> [MediaSearchResult]
 }
 
-struct WikimediaMovieSearchService: MovieSearchServing {
+struct MetadataCatalogSearchService: MediaSearchServing {
+    private let movieService = WikimediaMovieSearchService()
+    private let tvService = TVMazeSearchService()
+
+    func search(matching query: String, mode: MediaLibraryMode) async throws -> [MediaSearchResult] {
+        switch mode {
+        case .movie:
+            return try await movieService.searchMovies(matching: query)
+        case .tvShow:
+            return try await tvService.searchTV(matching: query)
+        }
+    }
+}
+
+private struct WikimediaMovieSearchService {
     private struct SearchResponse: Decodable {
         struct Query: Decodable {
             let search: [SearchHit]
@@ -163,7 +201,7 @@ struct WikimediaMovieSearchService: MovieSearchServing {
         }
     }
 
-    func searchMovies(matching query: String) async throws -> [MovieSearchResult] {
+    func searchMovies(matching query: String) async throws -> [MediaSearchResult] {
         let sanitizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sanitizedQuery.isEmpty else {
             return []
@@ -317,7 +355,7 @@ struct WikimediaMovieSearchService: MovieSearchServing {
     private func performRequest<Response: Decodable>(_ url: URL, decoding type: Response.Type) async throws -> Response {
         var request = URLRequest(url: url)
         request.setValue(
-            "MetaFetch/1.0 (macOS app for tagging MP4 movie files)",
+            "MetaFetch/1.0 (macOS app for tagging MP4 movie files and TV episodes)",
             forHTTPHeaderField: "User-Agent"
         )
 
@@ -340,7 +378,7 @@ struct WikimediaMovieSearchService: MovieSearchServing {
         imageURLs: [String: URL],
         normalizedQuery: String,
         expectedYear: String?
-    ) -> MovieSearchResult {
+    ) -> MediaSearchResult {
         let extract = detail.extract?.trimmingCharacters(in: .whitespacesAndNewlines)
         let shortDescription = detail.pageprops?.shortDescription?.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsedYear = extractYear(from: shortDescription) ?? extractYear(from: extract)
@@ -348,21 +386,27 @@ struct WikimediaMovieSearchService: MovieSearchServing {
         let parsedDirector = extractDirector(from: extract)
         let releaseDate = parsedYear.map { "\($0)-01-01T00:00:00Z" }
         let imageURL = detail.pageprops?.pageImage.flatMap { imageURLs[normalizedImageName($0)] }
+        let sourceURL = wikipediaURL(forPageID: detail.pageid, title: detail.title)
 
-        let provisionalResult = MovieSearchResult(
+        let provisionalResult = MediaSearchResult(
             trackId: detail.pageid ?? detail.title.hashValue,
+            mediaKind: .movie,
             trackName: detail.title,
+            seriesName: nil,
             artistName: parsedDirector,
             releaseDate: releaseDate,
             primaryGenreName: parsedGenre,
             shortDescription: shortDescription,
             longDescription: extract,
             contentAdvisoryRating: nil,
-            artworkUrl100: imageURL,
+            artworkURL: imageURL,
+            sourceURL: sourceURL,
             sourceName: "Wikipedia",
             matchConfidence: .possible,
             matchSummary: "Possible movie page match",
-            matchScore: 0
+            matchScore: 0,
+            seasonNumber: nil,
+            episodeNumber: nil
         )
 
         let evaluation = evaluateMatch(
@@ -371,25 +415,30 @@ struct WikimediaMovieSearchService: MovieSearchServing {
             expectedYear: expectedYear
         )
 
-        return MovieSearchResult(
+        return MediaSearchResult(
             trackId: provisionalResult.trackId,
+            mediaKind: provisionalResult.mediaKind,
             trackName: provisionalResult.trackName,
+            seriesName: provisionalResult.seriesName,
             artistName: provisionalResult.artistName,
             releaseDate: provisionalResult.releaseDate,
             primaryGenreName: provisionalResult.primaryGenreName,
             shortDescription: provisionalResult.shortDescription,
             longDescription: provisionalResult.longDescription,
             contentAdvisoryRating: provisionalResult.contentAdvisoryRating,
-            artworkUrl100: provisionalResult.artworkUrl100,
+            artworkURL: provisionalResult.artworkURL,
+            sourceURL: provisionalResult.sourceURL,
             sourceName: provisionalResult.sourceName,
             matchConfidence: evaluation.confidence,
             matchSummary: evaluation.summary,
-            matchScore: evaluation.score
+            matchScore: evaluation.score,
+            seasonNumber: nil,
+            episodeNumber: nil
         )
     }
 
     private func evaluateMatch(
-        _ result: MovieSearchResult,
+        _ result: MediaSearchResult,
         normalizedQuery: String,
         expectedYear: String?
     ) -> (score: Int, confidence: MatchConfidence, summary: String) {
@@ -566,32 +615,387 @@ struct WikimediaMovieSearchService: MovieSearchServing {
             || combinedText.contains(" starring ")
     }
 
-    private func normalizedTitle(from text: String) -> String {
-        text
-            .lowercased()
-            .replacingOccurrences(of: #"\([^)]*\)"#, with: " ", options: .regularExpression)
-            .replacingOccurrences(of: #"\b(19|20)\d{2}\b"#, with: " ", options: .regularExpression)
-            .replacingOccurrences(of: #"[^a-z0-9]+"#, with: " ", options: .regularExpression)
-            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
+    private func wikipediaURL(forPageID pageID: Int?, title: String) -> URL? {
+        if let pageID {
+            return URL(string: "https://en.wikipedia.org/?curid=\(pageID)")
+        }
 
-    private func normalizedImageName(_ text: String) -> String {
-        text
-            .lowercased()
-            .replacingOccurrences(of: "_", with: " ")
-            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-}
+        let encodedTitle = title
+            .replacingOccurrences(of: " ", with: "_")
+            .addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
 
-private extension Optional where Wrapped == String {
-    var nilIfBlank: String? {
-        guard let value = self?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+        guard let encodedTitle else {
             return nil
         }
 
-        return value
+        return URL(string: "https://en.wikipedia.org/wiki/\(encodedTitle)")
+    }
+}
+
+private struct TVMazeSearchService {
+    private struct ShowSearchHit: Decodable {
+        let score: Double
+        let show: TVMazeShow
+    }
+
+    private struct TVMazeShow: Decodable {
+        let id: Int
+        let url: URL?
+        let name: String
+        let premiered: String?
+        let summary: String?
+        let genres: [String]
+        let image: TVMazeImage?
+        let network: TVMazeNetwork?
+        let webChannel: TVMazeNetwork?
+    }
+
+    private struct TVMazeEpisode: Decodable {
+        let id: Int
+        let url: URL?
+        let name: String
+        let season: Int?
+        let number: Int?
+        let airdate: String?
+        let summary: String?
+        let image: TVMazeImage?
+    }
+
+    private struct TVMazeImage: Decodable {
+        let medium: URL?
+        let original: URL?
+    }
+
+    private struct TVMazeNetwork: Decodable {
+        let name: String
+    }
+
+    enum SearchError: LocalizedError {
+        case invalidURL
+        case invalidResponse
+        case requestFailed(statusCode: Int)
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidURL:
+                return "The TV show search URL could not be created."
+            case .invalidResponse:
+                return "The TV search service returned an unexpected response."
+            case .requestFailed(let statusCode):
+                return "The TV search failed with HTTP \(statusCode)."
+            }
+        }
+    }
+
+    func searchTV(matching query: String) async throws -> [MediaSearchResult] {
+        let parsedQuery = FilenameTitleParser.parsedManualQuery(query, mode: .tvShow)
+        let normalizedTitle = normalizedTitle(from: parsedQuery.title)
+
+        guard !normalizedTitle.isEmpty else {
+            return []
+        }
+
+        let hits = try await fetchShowMatches(for: parsedQuery.title)
+        guard !hits.isEmpty else {
+            return []
+        }
+
+        if parsedQuery.isEpisodeSpecific,
+           let seasonNumber = parsedQuery.seasonNumber,
+           let episodeNumber = parsedQuery.episodeNumber {
+            let episodeMatches = try await fetchEpisodeMatches(
+                from: Array(hits.prefix(6)),
+                parsedQuery: parsedQuery,
+                seasonNumber: seasonNumber,
+                episodeNumber: episodeNumber
+            )
+
+            if !episodeMatches.isEmpty {
+                return episodeMatches.sorted { lhs, rhs in
+                    if lhs.matchScore == rhs.matchScore {
+                        return lhs.trackName < rhs.trackName
+                    }
+
+                    return lhs.matchScore > rhs.matchScore
+                }
+            }
+        }
+
+        return hits
+            .prefix(10)
+            .map { buildShowResult(from: $0, parsedQuery: parsedQuery) }
+            .sorted { lhs, rhs in lhs.matchScore > rhs.matchScore }
+    }
+
+    private func fetchShowMatches(for title: String) async throws -> [ShowSearchHit] {
+        var components = URLComponents(string: "https://api.tvmaze.com/search/shows")
+        components?.queryItems = [
+            URLQueryItem(name: "q", value: title),
+        ]
+
+        guard let url = components?.url else {
+            throw SearchError.invalidURL
+        }
+
+        return try await performRequest(url, decoding: [ShowSearchHit].self)
+    }
+
+    private func fetchEpisodeMatches(
+        from hits: [ShowSearchHit],
+        parsedQuery: ParsedMediaQuery,
+        seasonNumber: Int,
+        episodeNumber: Int
+    ) async throws -> [MediaSearchResult] {
+        try await withThrowingTaskGroup(of: MediaSearchResult?.self) { group in
+            for hit in hits {
+                group.addTask {
+                    guard let episode = try await fetchEpisode(
+                        forShowID: hit.show.id,
+                        seasonNumber: seasonNumber,
+                        episodeNumber: episodeNumber
+                    ) else {
+                        return nil
+                    }
+
+                    return buildEpisodeResult(
+                        episode: episode,
+                        show: hit.show,
+                        showScore: hit.score,
+                        parsedQuery: parsedQuery
+                    )
+                }
+            }
+
+            var matches: [MediaSearchResult] = []
+            for try await result in group {
+                if let result {
+                    matches.append(result)
+                }
+            }
+
+            return matches
+        }
+    }
+
+    private func fetchEpisode(
+        forShowID showID: Int,
+        seasonNumber: Int,
+        episodeNumber: Int
+    ) async throws -> TVMazeEpisode? {
+        guard var components = URLComponents(string: "https://api.tvmaze.com/shows/\(showID)/episodebynumber") else {
+            throw SearchError.invalidURL
+        }
+
+        components.queryItems = [
+            URLQueryItem(name: "season", value: String(seasonNumber)),
+            URLQueryItem(name: "number", value: String(episodeNumber)),
+        ]
+
+        guard let url = components.url else {
+            throw SearchError.invalidURL
+        }
+
+        return try await performOptionalRequest(url, decoding: TVMazeEpisode.self)
+    }
+
+    private func performRequest<Response: Decodable>(_ url: URL, decoding type: Response.Type) async throws -> Response {
+        var request = URLRequest(url: url)
+        request.setValue(
+            "MetaFetch/1.0 (macOS app for tagging MP4 movie files and TV episodes)",
+            forHTTPHeaderField: "User-Agent"
+        )
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SearchError.invalidResponse
+        }
+
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw SearchError.requestFailed(statusCode: httpResponse.statusCode)
+        }
+
+        return try JSONDecoder().decode(Response.self, from: data)
+    }
+
+    private func performOptionalRequest<Response: Decodable>(
+        _ url: URL,
+        decoding type: Response.Type
+    ) async throws -> Response? {
+        var request = URLRequest(url: url)
+        request.setValue(
+            "MetaFetch/1.0 (macOS app for tagging MP4 movie files and TV episodes)",
+            forHTTPHeaderField: "User-Agent"
+        )
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SearchError.invalidResponse
+        }
+
+        if httpResponse.statusCode == 404 {
+            return nil
+        }
+
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw SearchError.requestFailed(statusCode: httpResponse.statusCode)
+        }
+
+        return try JSONDecoder().decode(Response.self, from: data)
+    }
+
+    private func buildEpisodeResult(
+        episode: TVMazeEpisode,
+        show: TVMazeShow,
+        showScore: Double,
+        parsedQuery: ParsedMediaQuery
+    ) -> MediaSearchResult {
+        let normalizedShowName = normalizedTitle(from: show.name)
+        let normalizedQuery = normalizedTitle(from: parsedQuery.title)
+        let exactTitle = normalizedShowName == normalizedQuery
+        let partialTitle = !exactTitle && normalizedShowName.contains(normalizedQuery)
+        let yearMatches = parsedQuery.year == nil || show.premiered?.hasPrefix(parsedQuery.year ?? "") == true
+
+        var score = Int(showScore * 30)
+        if exactTitle {
+            score += 120
+        } else if partialTitle {
+            score += 70
+        }
+
+        score += 80
+
+        if yearMatches, parsedQuery.year != nil {
+            score += 20
+        }
+
+        let confidence: MatchConfidence
+        if exactTitle && yearMatches {
+            confidence = .exact
+        } else if exactTitle || partialTitle {
+            confidence = .strong
+        } else {
+            confidence = .possible
+        }
+
+        let episodeCode = episodeCode(season: episode.season, episode: episode.number)
+        let summary: String
+        if exactTitle && yearMatches {
+            summary = "Exact show + \(episodeCode ?? "episode") match"
+        } else if exactTitle {
+            summary = "Exact show match for \(episodeCode ?? "episode")"
+        } else if partialTitle {
+            summary = "Strong show match for \(episodeCode ?? "episode")"
+        } else {
+            summary = "Episode found on a likely matching series"
+        }
+
+        return MediaSearchResult(
+            trackId: episode.id,
+            mediaKind: .tvEpisode,
+            trackName: episode.name.trimmedNilIfBlank ?? "\(show.name) \(episodeCode ?? "")".trimmedNilIfBlank ?? show.name,
+            seriesName: show.name,
+            artistName: show.network?.name ?? show.webChannel?.name,
+            releaseDate: isoDate(from: episode.airdate),
+            primaryGenreName: show.genres.joined(separator: ", ").trimmedNilIfBlank,
+            shortDescription: episode.summary?.htmlStripped(),
+            longDescription: (episode.summary?.htmlStripped()).trimmedNilIfBlank ?? show.summary?.htmlStripped(),
+            contentAdvisoryRating: nil,
+            artworkURL: episode.image?.original ?? episode.image?.medium ?? show.image?.original ?? show.image?.medium,
+            sourceURL: episode.url ?? show.url,
+            sourceName: "TVMaze",
+            matchConfidence: confidence,
+            matchSummary: summary,
+            matchScore: score,
+            seasonNumber: episode.season,
+            episodeNumber: episode.number
+        )
+    }
+
+    private func buildShowResult(from hit: ShowSearchHit, parsedQuery: ParsedMediaQuery) -> MediaSearchResult {
+        let show = hit.show
+        let normalizedShowName = normalizedTitle(from: show.name)
+        let normalizedQuery = normalizedTitle(from: parsedQuery.title)
+        let exactTitle = normalizedShowName == normalizedQuery
+        let partialTitle = !exactTitle && normalizedShowName.contains(normalizedQuery)
+        let yearMatches = parsedQuery.year == nil || show.premiered?.hasPrefix(parsedQuery.year ?? "") == true
+
+        var score = Int(hit.score * 30)
+        if exactTitle {
+            score += 120
+        } else if partialTitle {
+            score += 60
+        }
+
+        if yearMatches, parsedQuery.year != nil {
+            score += 20
+        }
+
+        let confidence: MatchConfidence
+        if exactTitle && yearMatches {
+            confidence = .exact
+        } else if exactTitle || partialTitle {
+            confidence = .strong
+        } else {
+            confidence = .possible
+        }
+
+        let summary: String
+        if parsedQuery.isEpisodeSpecific, let episodeCode = parsedQuery.episodeCode {
+            if exactTitle {
+                summary = "Exact show match, but \(episodeCode) was not found"
+            } else if partialTitle {
+                summary = "Strong show match, but \(episodeCode) was not found"
+            } else {
+                summary = "Series match only. Try refining the show title or episode code."
+            }
+        } else if exactTitle && yearMatches {
+            summary = "Exact show and year match"
+        } else if exactTitle {
+            summary = "Exact show match"
+        } else if partialTitle {
+            summary = "Strong show match"
+        } else {
+            summary = "Possible series match"
+        }
+
+        return MediaSearchResult(
+            trackId: show.id,
+            mediaKind: .tvSeries,
+            trackName: show.name,
+            seriesName: nil,
+            artistName: show.network?.name ?? show.webChannel?.name,
+            releaseDate: isoDate(from: show.premiered),
+            primaryGenreName: show.genres.joined(separator: ", ").trimmedNilIfBlank,
+            shortDescription: show.summary?.htmlStripped(),
+            longDescription: show.summary?.htmlStripped(),
+            contentAdvisoryRating: nil,
+            artworkURL: show.image?.original ?? show.image?.medium,
+            sourceURL: show.url,
+            sourceName: "TVMaze",
+            matchConfidence: confidence,
+            matchSummary: summary,
+            matchScore: score,
+            seasonNumber: nil,
+            episodeNumber: nil
+        )
+    }
+
+    private func episodeCode(season: Int?, episode: Int?) -> String? {
+        guard let season, let episode else {
+            return nil
+        }
+
+        return String(format: "S%02dE%02d", season, episode)
+    }
+
+    private func isoDate(from shortDate: String?) -> String? {
+        guard let shortDate = shortDate.trimmedNilIfBlank else {
+            return nil
+        }
+
+        return "\(shortDate)T00:00:00Z"
     }
 }
 
@@ -602,7 +1006,22 @@ private extension Array where Element: Hashable {
     }
 }
 
+private extension Optional where Wrapped == String {
+    var trimmedNilIfBlank: String? {
+        guard let value = self?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+
+        return value
+    }
+}
+
 private extension String {
+    var trimmedNilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     func firstMatch(for pattern: String) -> String? {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
             return nil
@@ -649,4 +1068,32 @@ private extension String {
 
         return cleaned
     }
+
+    func htmlStripped() -> String {
+        replacingOccurrences(of: #"<[^>]+>"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+private func normalizedTitle(from text: String) -> String {
+    text
+        .lowercased()
+        .replacingOccurrences(of: #"\([^)]*\)"#, with: " ", options: .regularExpression)
+        .replacingOccurrences(of: #"\b(19|20)\d{2}\b"#, with: " ", options: .regularExpression)
+        .replacingOccurrences(of: #"[^a-z0-9]+"#, with: " ", options: .regularExpression)
+        .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func normalizedImageName(_ text: String) -> String {
+    text
+        .lowercased()
+        .replacingOccurrences(of: "_", with: " ")
+        .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
 }

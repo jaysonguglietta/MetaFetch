@@ -4,6 +4,8 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @StateObject private var model = AppModel()
     @State private var isSidebarVisible = true
+    @State private var isHelpPresented = false
+    @State private var isStartOverConfirmationPresented = false
 
     var body: some View {
         ZStack {
@@ -46,9 +48,40 @@ struct ContentView: View {
                 }
                 .keyboardShortcut("s", modifiers: [.command, .option])
 
+                Button("Help", systemImage: "questionmark.circle") {
+                    isHelpPresented = true
+                }
+
+                if let selectedMode = model.selectedMode, model.canChooseMode {
+                    Menu(selectedMode.displayName) {
+                        ForEach(MediaLibraryMode.allCases) { mode in
+                            Button(mode.displayName) {
+                                model.chooseMode(mode)
+                            }
+                        }
+
+                        Divider()
+
+                        Button("Choose On Launch") {
+                            model.resetModeSelection()
+                        }
+                    }
+                }
+
+                if model.selectedMode != nil {
+                    Button("Start Over", systemImage: "arrow.counterclockwise") {
+                        if model.files.isEmpty {
+                            model.resetModeSelection()
+                        } else {
+                            isStartOverConfirmationPresented = true
+                        }
+                    }
+                }
+
                 Button("Add MP4 Files", systemImage: "plus") {
                     model.isFileImporterPresented = true
                 }
+                .disabled(model.selectedMode == nil)
 
                 Button("Save All Tagged", systemImage: "square.and.arrow.down") {
                     Task {
@@ -57,6 +90,22 @@ struct ContentView: View {
                 }
                 .disabled(!model.canSaveAnyTaggedFiles)
             }
+        }
+        .sheet(isPresented: $isHelpPresented) {
+            HelpView(currentMode: model.selectedMode)
+        }
+        .confirmationDialog(
+            "Start over?",
+            isPresented: $isStartOverConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Remove Loaded Files And Choose Again", role: .destructive) {
+                model.startOver()
+            }
+
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This only removes files from MetaFetch’s current queue. It does not delete or modify your MP4 files.")
         }
     }
 }
@@ -69,18 +118,22 @@ private struct SidebarView: View {
             VStack(alignment: .leading, spacing: 12) {
                 MetaFetchSidebarBrand()
 
-                Text("Video Store\nMetadata Deck")
+                Text(model.selectedMode?.sidebarHeading ?? "Choose Your\nMetadata Deck")
                     .font(RetroTheme.heroFont(30))
                     .foregroundStyle(RetroTheme.paper)
 
-                Text("Drag in tapes, tune the title, pick the right movie card, and stamp the file with fresh metadata.")
+                Text(model.selectedMode?.sidebarDescription ?? "Pick Movie or TV Show in the main deck, then drop in MP4 files and start tagging.")
                     .font(RetroTheme.bodyFont(14))
                     .foregroundStyle(RetroTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 8) {
                     SidebarStat(label: "Loaded", value: "\(model.files.count)", accent: RetroTheme.magenta)
-                    SidebarStat(label: "Ready", value: "\(model.files.filter { $0.selectedResult != nil }.count)", accent: RetroTheme.lime)
+                    SidebarStat(
+                        label: model.selectedMode?.statsReadyLabel ?? "Ready",
+                        value: "\(model.files.filter { $0.selectedResult != nil }.count)",
+                        accent: RetroTheme.lime
+                    )
                 }
             }
             .padding(20)
@@ -109,9 +162,16 @@ private struct SidebarView: View {
 
             if model.files.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
-                    RetroPill(text: "No Tapes Loaded", accent: RetroTheme.gold)
+                    RetroPill(
+                        text: model.selectedMode == nil ? "Choose A Mode" : "No Tapes Loaded",
+                        accent: RetroTheme.gold
+                    )
 
-                    Text("Drop one or more MP4 files in the main deck to start matching movies.")
+                    Text(
+                        model.selectedMode == nil
+                        ? "Pick Movie or TV Show in the main deck, then drop one or more MP4 files to start tagging."
+                        : "Drop one or more MP4 files in the main deck to start matching \(model.selectedMode == .movie ? "movies" : "episodes")."
+                    )
                         .font(RetroTheme.bodyFont(14))
                         .foregroundStyle(RetroTheme.muted)
                 }
@@ -169,6 +229,20 @@ private struct SidebarRow: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    InfoBadge(
+                        text: entry.mediaMode.badgeLabel,
+                        accent: entry.mediaMode == .movie ? RetroTheme.magenta : RetroTheme.cyan,
+                        foreground: RetroTheme.ink
+                    )
+
+                    InfoBadge(
+                        text: entry.batchReviewLabel,
+                        accent: batchAccent,
+                        foreground: batchForeground
+                    )
+                }
+
                 Text(entry.filename)
                     .font(RetroTheme.labelFont(17))
                     .foregroundStyle(RetroTheme.paper)
@@ -198,7 +272,7 @@ private struct SidebarRow: View {
             return "star.fill"
         }
 
-        return "film"
+        return entry.mediaMode.iconName
     }
 
     private var iconAccent: Color {
@@ -216,13 +290,37 @@ private struct SidebarRow: View {
 
         return RetroTheme.magenta
     }
+
+    private var batchAccent: Color {
+        switch entry.batchReviewLabel {
+        case "Exact", "Saved":
+            return RetroTheme.lime
+        case "Review", "Needs Review", "Series Only":
+            return RetroTheme.gold
+        case "Saving":
+            return RetroTheme.cyan
+        default:
+            return RetroTheme.paper.opacity(0.22)
+        }
+    }
+
+    private var batchForeground: Color {
+        switch entry.batchReviewLabel {
+        case "Exact", "Saved", "Review", "Needs Review", "Series Only", "Saving":
+            return RetroTheme.ink
+        default:
+            return RetroTheme.paper
+        }
+    }
 }
 
 private struct DetailView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        if let selectedFile = model.selectedFile {
+        if model.selectedMode == nil {
+            ModeSelectionView(model: model)
+        } else if let selectedFile = model.selectedFile {
             FileWorkspaceView(model: model, entry: selectedFile)
         } else {
             EmptyStateView(model: model)
@@ -230,10 +328,134 @@ private struct DetailView: View {
     }
 }
 
+private struct ModeSelectionView: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 26) {
+                Spacer(minLength: 34)
+
+                VStack(spacing: 14) {
+                    VStack(spacing: 12) {
+                        MetaFetchLogoLockup(
+                            markSize: 82,
+                            wordmarkSize: 42,
+                            subtitle: "movie + tv metadata tagging"
+                        )
+                        RetroPill(text: "Choose Your Deck", accent: RetroTheme.magenta)
+                    }
+
+                    Text("What Are We Tagging Today?")
+                        .font(RetroTheme.heroFont(42))
+                        .foregroundStyle(RetroTheme.paper)
+                        .multilineTextAlignment(.center)
+
+                    Text("Pick the library type first so MetaFetch can search with the right brain: films on one side, TV episodes on the other.")
+                        .font(RetroTheme.bodyFont(19))
+                        .foregroundStyle(RetroTheme.muted)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 760)
+                }
+
+                HStack(alignment: .top, spacing: 20) {
+                    ForEach(MediaLibraryMode.allCases) { mode in
+                        ModeChoiceCard(mode: mode) {
+                            model.chooseMode(mode)
+                        }
+                    }
+                }
+                .frame(maxWidth: 920)
+
+                if let noticeMessage = model.noticeMessage {
+                    Text(noticeMessage)
+                        .font(RetroTheme.bodyFont(15))
+                        .foregroundStyle(RetroTheme.gold)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 14)
+                        .retroPanel(accent: RetroTheme.gold)
+                        .frame(maxWidth: 760)
+                }
+
+                Spacer(minLength: 26)
+            }
+            .padding(26)
+        }
+    }
+}
+
+private struct ModeChoiceCard: View {
+    let mode: MediaLibraryMode
+    let choose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                Image(systemName: mode.iconName)
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(RetroTheme.ink)
+                    .frame(width: 48, height: 48)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [RetroTheme.magenta, RetroTheme.gold],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    )
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(mode.displayName.uppercased())
+                        .font(RetroTheme.labelFont(14))
+                        .tracking(2.2)
+                        .foregroundStyle(RetroTheme.gold)
+
+                    Text(mode.modePickerSummary)
+                        .font(RetroTheme.heroFont(24))
+                        .foregroundStyle(RetroTheme.paper)
+                }
+            }
+
+            Text(mode.modePickerDetail)
+                .font(RetroTheme.bodyFont(15))
+                .foregroundStyle(RetroTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 8) {
+                FeatureCard(
+                    title: "Search Style",
+                    copy: mode == .movie
+                        ? "Best for title + year lookups like The Matrix 1999."
+                        : "Best for show + episode lookups like Severance S02E04.",
+                    accent: RetroTheme.cyan
+                )
+
+                FeatureCard(
+                    title: "Saved Tags",
+                    copy: mode == .movie
+                        ? "Writes film metadata, synopsis, artwork, and more into the MP4."
+                        : "Writes episode title, series name, season/episode context, artwork, and more into the MP4.",
+                    accent: RetroTheme.magenta
+                )
+            }
+
+            Button("Choose \(mode.displayName)", action: choose)
+                .buttonStyle(RetroPrimaryButtonStyle(accent: mode == .movie ? RetroTheme.gold : RetroTheme.cyan))
+        }
+        .padding(22)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .retroPanel(accent: mode == .movie ? RetroTheme.gold : RetroTheme.cyan)
+    }
+}
+
 private struct EmptyStateView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
+        let mode = model.selectedMode ?? .movie
+
         ScrollView {
             VStack(spacing: 26) {
                 Spacer(minLength: 30)
@@ -248,12 +470,12 @@ private struct EmptyStateView: View {
                         RetroPill(text: "1990s Tape Lab", accent: RetroTheme.magenta)
                     }
 
-                    Text("Stamp Your MP4s Like It’s 1999")
+                    Text(mode.emptyStateTitle)
                         .font(RetroTheme.heroFont(42))
                         .foregroundStyle(RetroTheme.paper)
                         .multilineTextAlignment(.center)
 
-                    Text("Drag in movie files, search the title, browse bright matching cards, and write the chosen metadata back into the file with a VHS-era glow.")
+                    Text(mode.emptyStateCopy)
                         .font(RetroTheme.bodyFont(19))
                         .foregroundStyle(RetroTheme.muted)
                         .multilineTextAlignment(.center)
@@ -261,11 +483,17 @@ private struct EmptyStateView: View {
                 }
 
                 DropZoneCard(
+                    mode: mode,
                     compact: false,
                     openPanel: { model.isFileImporterPresented = true },
                     receiveFiles: { model.importFiles(from: $0) }
                 )
                 .frame(maxWidth: 860)
+
+                Button("Start Over / Choose Movie or TV Show") {
+                    model.resetModeSelection()
+                }
+                .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.cyan))
 
                 LazyVGrid(
                     columns: [
@@ -282,13 +510,17 @@ private struct EmptyStateView: View {
 
                     FeatureCard(
                         title: "Pick The Cut",
-                        copy: "Browse likely film pages and lock the one that best matches the movie in hand.",
+                        copy: mode == .movie
+                            ? "Browse likely film pages and lock the one that best matches the movie in hand."
+                            : "Browse series or episode cards and lock the one that best matches the file in hand.",
                         accent: RetroTheme.magenta
                     )
 
                     FeatureCard(
                         title: "Write It Back",
-                        copy: "Save title, synopsis, year, artwork, and more directly into the MP4 container.",
+                        copy: mode == .movie
+                            ? "Save title, synopsis, year, artwork, and more directly into the MP4 container."
+                            : "Save series, episode title, season/episode context, artwork, and more directly into the MP4 container.",
                         accent: RetroTheme.gold
                     )
                 }
@@ -348,6 +580,7 @@ private struct FileWorkspaceView: View {
                 .retroPanel(accent: RetroTheme.cyan)
 
                 DropZoneCard(
+                    mode: entry.mediaMode,
                     compact: true,
                     openPanel: { model.isFileImporterPresented = true },
                     receiveFiles: { model.importFiles(from: $0) }
@@ -372,9 +605,23 @@ private struct FileWorkspaceView: View {
                         }
                     }
 
-                    Text("We clean up the filename first, but you can dial in the title manually before pulling fresh matches.")
+                    Text(entry.mediaMode.searchHelperCopy)
                         .font(RetroTheme.bodyFont(15))
                         .foregroundStyle(RetroTheme.muted)
+
+                    if let episodeDetectionSummary = entry.episodeDetectionSummary {
+                        HStack(spacing: 10) {
+                            Image(systemName: episodeDetectionSummary.hasPrefix("Detected") ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                                .foregroundStyle(episodeDetectionSummary.hasPrefix("Detected") ? RetroTheme.lime : RetroTheme.gold)
+
+                            Text(episodeDetectionSummary)
+                                .font(RetroTheme.bodyFont(14))
+                                .foregroundStyle(RetroTheme.paper)
+                        }
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .retroPanel(accent: episodeDetectionSummary.hasPrefix("Detected") ? RetroTheme.lime : RetroTheme.gold)
+                    }
 
                     SearchStatusView(entry: entry)
                 }
@@ -410,7 +657,7 @@ private struct FileWorkspaceView: View {
                 subtitle: nil
             )
 
-            RetroPill(text: "Now Loading", accent: RetroTheme.cyan)
+            RetroPill(text: entry.mediaMode.displayName, accent: RetroTheme.cyan)
 
             Text(entry.filename)
                 .font(RetroTheme.heroFont(34))
@@ -431,7 +678,7 @@ private struct FileWorkspaceView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(RetroTheme.gold)
 
-            TextField("Movie title", text: $entry.queryText)
+            TextField(entry.mediaMode.searchPlaceholder, text: $entry.queryText)
                 .textFieldStyle(.plain)
                 .font(RetroTheme.bodyFont(17))
                 .foregroundStyle(RetroTheme.paper)
@@ -471,7 +718,7 @@ private struct FileWorkspaceView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     RetroPill(text: "No Cards Yet", accent: RetroTheme.gold)
 
-                    Text("Search results will land here after the title lookup finishes.")
+                    Text(entry.mediaMode.emptyRackCopy)
                         .font(RetroTheme.bodyFont(15))
                         .foregroundStyle(RetroTheme.muted)
                 }
@@ -570,7 +817,7 @@ private struct SearchStatusView: View {
                 ProgressView()
                     .tint(RetroTheme.cyan)
 
-                Text("Searching movie matches...")
+                Text(entry.mediaMode.searchingMatchesLabel)
                     .font(RetroTheme.bodyFont(15))
                     .foregroundStyle(RetroTheme.paper)
             }
@@ -596,15 +843,16 @@ private struct SearchStatusView: View {
 }
 
 private struct DropZoneCard: View {
+    let mode: MediaLibraryMode
     var compact: Bool
     let openPanel: () -> Void
     let receiveFiles: ([URL]) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 12 : 18) {
-            RetroPill(text: compact ? "Drop More Files" : "Drag MP4 Movies Here", accent: RetroTheme.gold)
+            RetroPill(text: compact ? "Drop More Files" : mode.dragTitle, accent: RetroTheme.gold)
 
-            Text(compact ? "Load another tape into the deck." : "Feed the metadata machine with a fresh batch of movie files.")
+            Text(compact ? "Load another tape into the deck." : mode.dragBody)
                 .font(compact ? RetroTheme.heroFont(22) : RetroTheme.heroFont(30))
                 .foregroundStyle(RetroTheme.paper)
 
@@ -642,58 +890,79 @@ private struct DropZoneCard: View {
 }
 
 private struct SearchResultCard: View {
-    let result: MovieSearchResult
+    let result: MediaSearchResult
     let isSelected: Bool
     let select: () -> Void
 
     var body: some View {
-        Button(action: select) {
-            HStack(alignment: .top, spacing: 16) {
-                ArtworkView(url: result.artworkURL, width: 82, height: 122, accent: isSelected ? RetroTheme.lime : RetroTheme.paper.opacity(0.24))
-
-                VStack(alignment: .leading, spacing: 10) {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(alignment: .top) {
-                            titleBlock
-
-                            Spacer(minLength: 12)
-
-                            if isSelected {
-                                RetroPill(text: "Selected", accent: RetroTheme.lime)
-                            }
-                        }
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            titleBlock
-
-                            if isSelected {
-                                RetroPill(text: "Selected", accent: RetroTheme.lime)
-                            }
-                        }
-                    }
-
-                    HStack(spacing: 8) {
-                        MatchConfidenceBadge(confidence: result.matchConfidence)
-                        InfoBadge(text: result.sourceName, accent: RetroTheme.paper.opacity(0.18), foreground: RetroTheme.paper)
-                    }
-
-                    Text(result.matchSummary)
-                        .font(RetroTheme.labelFont(12))
-                        .tracking(1.1)
-                        .foregroundStyle(result.matchConfidence.accent)
-
-                    Text(result.synopsisPreview)
-                        .font(RetroTheme.bodyFont(15))
-                        .foregroundStyle(RetroTheme.muted)
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(4)
-                }
+        VStack(alignment: .leading, spacing: 12) {
+            Button(action: select) {
+                cardContent
             }
-            .padding(18)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .retroPanel(accent: isSelected ? RetroTheme.lime : RetroTheme.paper.opacity(0.14))
+            .buttonStyle(.plain)
+
+            if let sourceURL = result.sourceURL {
+                Link(destination: sourceURL) {
+                    Label("Open Source", systemImage: "safari")
+                        .font(RetroTheme.labelFont(11))
+                        .tracking(1.8)
+                        .foregroundStyle(RetroTheme.cyan)
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .buttonStyle(.plain)
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .retroPanel(accent: isSelected ? RetroTheme.lime : RetroTheme.paper.opacity(0.14))
+    }
+
+    private var cardContent: some View {
+        HStack(alignment: .top, spacing: 16) {
+            ArtworkView(url: result.artworkURL, width: 82, height: 122, accent: isSelected ? RetroTheme.lime : RetroTheme.paper.opacity(0.24))
+
+            VStack(alignment: .leading, spacing: 10) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top) {
+                        titleBlock
+
+                        Spacer(minLength: 12)
+
+                        if isSelected {
+                            RetroPill(text: "Selected", accent: RetroTheme.lime)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        titleBlock
+
+                        if isSelected {
+                            RetroPill(text: "Selected", accent: RetroTheme.lime)
+                        }
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    InfoBadge(
+                        text: result.mediaKind.label,
+                        accent: RetroTheme.cyan,
+                        foreground: RetroTheme.ink
+                    )
+                    MatchConfidenceBadge(confidence: result.matchConfidence)
+                    InfoBadge(text: result.sourceName, accent: RetroTheme.paper.opacity(0.18), foreground: RetroTheme.paper)
+                }
+
+                Text(result.matchSummary)
+                    .font(RetroTheme.labelFont(12))
+                    .tracking(1.1)
+                    .foregroundStyle(result.matchConfidence.accent)
+
+                Text(result.synopsisPreview)
+                    .font(RetroTheme.bodyFont(15))
+                    .foregroundStyle(RetroTheme.muted)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(4)
+            }
+        }
     }
 
     private var titleBlock: some View {
@@ -749,6 +1018,11 @@ private struct SelectionPreviewCard: View {
                 }
 
                 HStack(spacing: 8) {
+                    InfoBadge(
+                        text: match.mediaKind.label,
+                        accent: RetroTheme.cyan,
+                        foreground: RetroTheme.ink
+                    )
                     MatchConfidenceBadge(confidence: match.matchConfidence)
                     InfoBadge(text: match.sourceName, accent: RetroTheme.paper.opacity(0.18), foreground: RetroTheme.paper)
                 }
@@ -757,16 +1031,32 @@ private struct SelectionPreviewCard: View {
                     .font(RetroTheme.bodyFont(14))
                     .foregroundStyle(match.matchConfidence.accent)
 
+                if let sourceURL = match.sourceURL {
+                    Link(destination: sourceURL) {
+                        Label("Open Source Details", systemImage: "safari")
+                            .font(RetroTheme.labelFont(12))
+                            .tracking(1.8)
+                            .foregroundStyle(RetroTheme.cyan)
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 Divider()
                     .overlay(RetroTheme.paper.opacity(0.16))
 
                 VStack(alignment: .leading, spacing: 9) {
                     MetadataLine(label: "Match", value: match.matchSummary)
                     MetadataLine(label: "Source", value: match.sourceName)
-                    MetadataLine(label: "Title", value: match.trackName)
+                    MetadataLine(label: match.mediaKind == .tvEpisode ? "Episode" : "Title", value: match.trackName)
+                    if let seriesName = match.seriesName {
+                        MetadataLine(label: "Series", value: seriesName)
+                    }
+                    if let seasonEpisodeLabel = match.seasonEpisodeLabel {
+                        MetadataLine(label: "Episode Code", value: seasonEpisodeLabel)
+                    }
                     MetadataLine(label: "Genre", value: match.primaryGenreName ?? "Not provided")
                     MetadataLine(label: "Year", value: match.releaseYear ?? "Not provided")
-                    MetadataLine(label: "Creator", value: match.artistName ?? "Not provided")
+                    MetadataLine(label: match.creatorLabel, value: match.creatorValue ?? "Not provided")
                     MetadataLine(label: "Artwork", value: match.artworkURL == nil ? "None" : "Included")
                 }
 
@@ -801,13 +1091,33 @@ private struct SelectionPreviewCard: View {
                 .disabled(!entry.canSave)
 
                 if entry.isSaving {
-                    HStack(spacing: 10) {
-                        ProgressView()
-                            .tint(RetroTheme.lime)
+                    VStack(alignment: .leading, spacing: 10) {
+                        if let saveProgress = entry.normalizedSaveProgress {
+                            ProgressView(value: saveProgress)
+                                .progressViewStyle(.linear)
+                                .tint(RetroTheme.lime)
 
-                        Text(entry.statusMessage)
-                            .font(RetroTheme.bodyFont(13))
-                            .foregroundStyle(RetroTheme.paper)
+                            HStack {
+                                Text(entry.statusMessage)
+                                    .font(RetroTheme.bodyFont(13))
+                                    .foregroundStyle(RetroTheme.paper)
+
+                                Spacer()
+
+                                Text(entry.saveProgressLabel)
+                                    .font(RetroTheme.labelFont(12))
+                                    .foregroundStyle(RetroTheme.lime)
+                            }
+                        } else {
+                            HStack(spacing: 10) {
+                                ProgressView()
+                                    .tint(RetroTheme.lime)
+
+                                Text(entry.statusMessage)
+                                    .font(RetroTheme.bodyFont(13))
+                                    .foregroundStyle(RetroTheme.paper)
+                            }
+                        }
                     }
                 }
 
@@ -821,7 +1131,7 @@ private struct SelectionPreviewCard: View {
                 VStack(alignment: .leading, spacing: 10) {
                     RetroPill(text: "Review Needed", accent: RetroTheme.magenta)
 
-                    Text("Choose one of the movie cards on the left to preview the metadata that will get written into the MP4.")
+                    Text(entry.mediaMode.selectionPrompt)
                         .font(RetroTheme.bodyFont(15))
                         .foregroundStyle(RetroTheme.muted)
                 }
@@ -830,6 +1140,127 @@ private struct SelectionPreviewCard: View {
         }
         .padding(20)
         .retroPanel(accent: RetroTheme.lime)
+    }
+}
+
+private struct HelpView: View {
+    @Environment(\.dismiss) private var dismiss
+    let currentMode: MediaLibraryMode?
+
+    var body: some View {
+        ZStack {
+            RetroBackdrop()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            MetaFetchLogoLockup(
+                                markSize: 44,
+                                wordmarkSize: 28,
+                                subtitle: "help deck"
+                            )
+
+                            Text("MetaFetch Help")
+                                .font(RetroTheme.heroFont(38))
+                                .foregroundStyle(RetroTheme.paper)
+
+                            Text("Current deck: \(currentMode?.displayName ?? "Choose Movie or TV Show")")
+                                .font(RetroTheme.bodyFont(16))
+                                .foregroundStyle(RetroTheme.muted)
+                        }
+
+                        Spacer()
+
+                        Button("Close") {
+                            dismiss()
+                        }
+                        .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+                    }
+
+                    HelpSection(
+                        title: "Basic Flow",
+                        accent: RetroTheme.cyan,
+                        rows: [
+                            "Choose Movie or TV Show before importing.",
+                            "Drop one or more MP4 files or use Add MP4 Files.",
+                            "Review the suggested search query and search again if needed.",
+                            "Pick the best result card, then save metadata back to the MP4.",
+                        ]
+                    )
+
+                    HelpSection(
+                        title: "TV Episode Tips",
+                        accent: RetroTheme.magenta,
+                        rows: [
+                            "Filenames like Show.Name.S01E03.mp4 and Show.Name.2x07.mp4 are detected automatically.",
+                            "If the filename is generic, folder names help. For example: Severance/Season 2/Episode 04.mp4.",
+                            "A Series Only badge means MetaFetch found the show, but not a specific episode yet.",
+                            "Add or edit an episode code like S02E04 in the search field for exact episode tags.",
+                        ]
+                    )
+
+                    HelpSection(
+                        title: "Saving Speed",
+                        accent: RetroTheme.gold,
+                        rows: [
+                            "Fast Save Metadata tries a metadata-only header update when poster artwork is off.",
+                            "Saving with poster artwork may rewrite the MP4 container, but video/audio are exported with passthrough.",
+                            "The progress bar tracks the current save path and shows when MetaFetch falls back to a full rewrite.",
+                        ]
+                    )
+
+                    HelpSection(
+                        title: "Review Badges",
+                        accent: RetroTheme.lime,
+                        rows: [
+                            "Exact means MetaFetch is confident enough to auto-select.",
+                            "Review means the result is plausible but deserves a quick look.",
+                            "Series Only means a TV show result was found without an exact episode.",
+                            "Open Source lets you inspect the Wikipedia or TVMaze page behind a result.",
+                        ]
+                    )
+                }
+                .padding(28)
+                .frame(maxWidth: 880, alignment: .leading)
+            }
+        }
+        .preferredColorScheme(.dark)
+        .frame(minWidth: 720, minHeight: 640)
+    }
+}
+
+private struct HelpSection: View {
+    let title: String
+    let accent: Color
+    let rows: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            RetroSectionTitle(
+                eyebrow: "Guide",
+                title: title,
+                accent: accent
+            )
+
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(rows, id: \.self) { row in
+                    HStack(alignment: .top, spacing: 10) {
+                        Circle()
+                            .fill(accent)
+                            .frame(width: 7, height: 7)
+                            .padding(.top, 7)
+
+                        Text(row)
+                            .font(RetroTheme.bodyFont(15))
+                            .foregroundStyle(RetroTheme.paper)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .retroPanel(accent: accent)
     }
 }
 
