@@ -26,6 +26,8 @@ The.Matrix.1999.1080p.BluRay.mp4
 Mad.Max.Fury.Road.(2015).WEB-DL.mp4
 ```
 
+If a title has multiple versions or remakes, include the release year in the search box before searching again.
+
 ## TV Workflow
 
 1. Choose `TV Show`.
@@ -50,6 +52,19 @@ Severance Season 2/E04.mp4
 
 If MetaFetch shows `Series Only`, it found the show but not a specific episode. Add an episode code like `S02E04` to the search box and search again.
 
+## What Gets Written
+
+MetaFetch writes the selected title, description, genre when available, media kind, and artwork when poster saving is enabled.
+
+Movie files receive movie-style metadata. TV episode files receive episode-focused metadata such as show title, season number, episode number, and episode title when the source returns those fields.
+
+## Search And Review Tips
+
+- Shorter searches often work better than long release filenames.
+- Add a year for remakes, reboots, or titles with many similarly named results.
+- In TV mode, include `S01E03` or `2x07` when you want a specific episode result.
+- Use `Open Source` before saving when two result cards look similar.
+
 ## Review Badges
 
 - `Exact`: High-confidence match.
@@ -68,7 +83,12 @@ Use `Open Source` on result cards to inspect the source page before choosing a m
 
 ## In-App Help
 
-Use the `Help` toolbar button for a quick version of this guide inside MetaFetch.
+Use the `Help` toolbar button for a quick version of this guide inside MetaFetch. You can also choose `Help > MetaFetch Help` from the macOS menu bar or press `Command-Shift-?`.
+
+## Keyboard Shortcuts
+
+- `Command-Shift-?`: Open MetaFetch Help.
+- `Command-Option-S`: Show or hide the sidebar.
 
 ## Troubleshooting
 
@@ -77,3 +97,8 @@ Use the `Help` toolbar button for a quick version of this guide inside MetaFetch
 - If the sidebar is hidden, use `Hide Sidebar` / `Show Sidebar` in the toolbar.
 - If saving is slow, turn off poster artwork and use `Fast Save Metadata`.
 - If the app feels stuck on a bad batch, use `Start Over` to clear the queue and choose a mode again.
+- If you are tagging important originals, keep a backup copy until you are comfortable with the save path.
+
+## Feature Suggestions
+
+See [Feature Suggestions](FeatureSuggestions.md) for a prioritized list of product improvements.

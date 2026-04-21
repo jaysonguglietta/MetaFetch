@@ -27,6 +27,24 @@ That path builds and opens a real `.app` bundle with the bundle identifier `com.
 
 See [User Guide](Documentation/UserGuide.md) for the full workflow, naming tips, save behavior, and troubleshooting.
 
+See [Feature Suggestions](Documentation/FeatureSuggestions.md) for the next product ideas worth considering.
+
+In the app, use the `Help` toolbar button or choose `Help > MetaFetch Help` with `Command-Shift-?`.
+
+## Development
+
+Run the test suite:
+
+```bash
+swift test
+```
+
+Build the local app bundle:
+
+```bash
+./Scripts/build_app.sh
+```
+
 ## Data Sources
 
 - Movies use Wikipedia/Wikimedia metadata and page images.

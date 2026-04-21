@@ -25,6 +25,14 @@ struct MetaFetchApp: App {
             ContentView()
                 .frame(minWidth: 1080, minHeight: 720)
         }
+        .commands {
+            CommandGroup(replacing: .help) {
+                Button("MetaFetch Help") {
+                    NotificationCenter.default.post(name: .showMetaFetchHelp, object: nil)
+                }
+                .keyboardShortcut("/", modifiers: [.command, .shift])
+            }
+        }
     }
 }
 

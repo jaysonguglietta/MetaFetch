@@ -94,6 +94,9 @@ struct ContentView: View {
         .sheet(isPresented: $isHelpPresented) {
             HelpView(currentMode: model.selectedMode)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .showMetaFetchHelp)) { _ in
+            isHelpPresented = true
+        }
         .confirmationDialog(
             "Start over?",
             isPresented: $isStartOverConfirmationPresented,
@@ -1190,6 +1193,17 @@ private struct HelpView: View {
                     )
 
                     HelpSection(
+                        title: "Best Search Results",
+                        accent: RetroTheme.lime,
+                        rows: [
+                            "Movie filenames work best when they include a clean title and year, like The.Matrix.1999.mp4.",
+                            "TV filenames work best with season and episode codes, like Severance.S02E04.mp4 or Severance.2x04.mp4.",
+                            "If a filename is messy, edit the search box directly and search again.",
+                            "Use Open Source when two matches look similar and you want to confirm the source page.",
+                        ]
+                    )
+
+                    HelpSection(
                         title: "TV Episode Tips",
                         accent: RetroTheme.magenta,
                         rows: [
@@ -1197,6 +1211,17 @@ private struct HelpView: View {
                             "If the filename is generic, folder names help. For example: Severance/Season 2/Episode 04.mp4.",
                             "A Series Only badge means MetaFetch found the show, but not a specific episode yet.",
                             "Add or edit an episode code like S02E04 in the search field for exact episode tags.",
+                        ]
+                    )
+
+                    HelpSection(
+                        title: "Keyboard Shortcuts",
+                        accent: RetroTheme.cyan,
+                        rows: [
+                            "Command-Shift-? opens this help deck from the macOS Help menu.",
+                            "Command-Option-S shows or hides the sidebar.",
+                            "Use Add MP4 Files when dragging files from Finder is not convenient.",
+                            "Use Start Over to clear the current queue without deleting or changing your MP4 files.",
                         ]
                     )
 
@@ -1211,6 +1236,17 @@ private struct HelpView: View {
                     )
 
                     HelpSection(
+                        title: "Troubleshooting",
+                        accent: RetroTheme.magenta,
+                        rows: [
+                            "No matches usually means the query is too noisy. Try a shorter title or add the release year.",
+                            "Series Only in TV mode means MetaFetch found the show but still needs a specific episode code.",
+                            "If saving is slow, turn off poster artwork so MetaFetch can try the metadata-only fast path.",
+                            "If the layout feels cramped, hide the sidebar or widen the app window before reviewing poster cards.",
+                        ]
+                    )
+
+                    HelpSection(
                         title: "Review Badges",
                         accent: RetroTheme.lime,
                         rows: [
@@ -1218,6 +1254,17 @@ private struct HelpView: View {
                             "Review means the result is plausible but deserves a quick look.",
                             "Series Only means a TV show result was found without an exact episode.",
                             "Open Source lets you inspect the Wikipedia or TVMaze page behind a result.",
+                        ]
+                    )
+
+                    HelpSection(
+                        title: "Good Next Upgrades",
+                        accent: RetroTheme.gold,
+                        rows: [
+                            "Backup-before-save would make experiments safer when tagging rare files.",
+                            "A manual metadata editor would let you tweak title, synopsis, genre, and artwork before saving.",
+                            "Batch folder scanning could auto-group shows by series and season.",
+                            "A save report could list which files used fast metadata saves versus full MP4 rewrites.",
                         ]
                     )
                 }
