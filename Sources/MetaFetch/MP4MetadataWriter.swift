@@ -22,6 +22,7 @@ struct MP4MetadataWriter: MetadataWriting {
         case unsupportedFileType
         case exportFailed
         case exportCancelled
+        case metadataVerificationFailed
 
         var errorDescription: String? {
             switch self {
@@ -33,6 +34,8 @@ struct MP4MetadataWriter: MetadataWriting {
                 return "AVFoundation failed to export the tagged MP4."
             case .exportCancelled:
                 return "The MP4 export was cancelled."
+            case .metadataVerificationFailed:
+                return "MetaFetch could not verify that the metadata was written to the MP4."
             }
         }
     }
@@ -56,6 +59,7 @@ struct MP4MetadataWriter: MetadataWriting {
                 let usedFastPath = await attemptMetadataOnlyFastPath(
                     to: fileURL,
                     metadataItems: metadataItems,
+                    verificationExpectation: MetadataVerificationExpectation(result: result),
                     safetyBackupURL: safetyBackupURL,
                     progressHandler: progressHandler
                 )
@@ -110,6 +114,18 @@ struct MP4MetadataWriter: MetadataWriting {
                 options: []
             )
 
+            await progressHandler?(makeProgressUpdate(
+                fractionCompleted: 0.99,
+                message: "Verifying saved metadata"
+            ))
+
+            guard await metadataWasPersisted(
+                at: fileURL,
+                expectation: MetadataVerificationExpectation(result: result)
+            ) else {
+                throw WriterError.metadataVerificationFailed
+            }
+
             await removeSafetyBackup(at: safetyBackupURL, progressHandler: progressHandler)
         } catch {
             try? restoreOriginal(from: safetyBackupURL, to: fileURL)
@@ -120,6 +136,7 @@ struct MP4MetadataWriter: MetadataWriting {
     private func attemptMetadataOnlyFastPath(
         to fileURL: URL,
         metadataItems: [AVMetadataItem],
+        verificationExpectation: MetadataVerificationExpectation,
         safetyBackupURL: URL,
         progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)?
     ) async -> Bool {
@@ -156,6 +173,23 @@ struct MP4MetadataWriter: MetadataWriting {
                 fileType: outputFileType,
                 options: .addMovieHeaderToDestination
             )
+
+            await progressHandler?(makeProgressUpdate(
+                fractionCompleted: 0.88,
+                message: "Verifying metadata-only save"
+            ))
+
+            guard await metadataWasPersisted(
+                at: fileURL,
+                expectation: verificationExpectation
+            ) else {
+                try? restoreOriginal(from: safetyBackupURL, to: fileURL)
+                await progressHandler?(makeProgressUpdate(
+                    fractionCompleted: 0.08,
+                    message: "Metadata-only save did not verify, falling back to full rewrite"
+                ))
+                return false
+            }
 
             await progressHandler?(makeProgressUpdate(
                 fractionCompleted: 1,
@@ -228,6 +262,36 @@ struct MP4MetadataWriter: MetadataWriting {
         } else {
             try FileManager.default.moveItem(at: restoreURL, to: fileURL)
         }
+    }
+
+    private func metadataWasPersisted(
+        at fileURL: URL,
+        expectation: MetadataVerificationExpectation
+    ) async -> Bool {
+        let asset = AVURLAsset(url: fileURL)
+        var metadataItems: [AVMetadataItem] = []
+
+        if let commonMetadata = try? await asset.load(.commonMetadata) {
+            metadataItems.append(contentsOf: commonMetadata)
+        }
+
+        if let metadata = try? await asset.load(.metadata) {
+            metadataItems.append(contentsOf: metadata)
+        }
+
+        if let quickTimeMetadata = try? await asset.loadMetadata(for: .quickTimeMetadata) {
+            metadataItems.append(contentsOf: quickTimeMetadata)
+        }
+
+        if let iTunesMetadata = try? await asset.loadMetadata(for: .iTunesMetadata) {
+            metadataItems.append(contentsOf: iTunesMetadata)
+        }
+
+        if let quickTimeUserData = try? await asset.loadMetadata(for: .quickTimeUserData) {
+            metadataItems.append(contentsOf: quickTimeUserData)
+        }
+
+        return await expectation.isSatisfied(by: metadataItems)
     }
 
     private func buildMetadataItems(for result: MediaSearchResult, includeArtwork: Bool) async throws -> [AVMetadataItem] {
@@ -497,6 +561,90 @@ private final class ExportSessionBox: @unchecked Sendable {
 
     init(_ session: AVAssetExportSession) {
         self.session = session
+    }
+}
+
+private struct MetadataVerificationExpectation {
+    struct RequiredString {
+        let value: String
+        let identifiers: Set<AVMetadataIdentifier>
+    }
+
+    let requiredStrings: [RequiredString]
+
+    init(result: MediaSearchResult) {
+        // Keep verification conservative: long descriptions and specialty atoms can be normalized
+        // differently by AVFoundation, but title/album atoms should survive every successful save.
+        var requiredStrings = [
+            RequiredString(
+                value: result.trackName,
+                identifiers: [
+                    .commonIdentifierTitle,
+                    .quickTimeUserDataFullName,
+                    .iTunesMetadataSongName,
+                ]
+            ),
+        ]
+
+        switch result.mediaKind {
+        case .movie:
+            break
+        case .tvEpisode:
+            if let seriesName = result.seriesName.nilIfBlank {
+                requiredStrings.append(RequiredString(
+                    value: seriesName,
+                    identifiers: [
+                        .commonIdentifierAlbumName,
+                        .quickTimeUserDataAlbum,
+                        .iTunesMetadataAlbum,
+                    ]
+                ))
+            }
+        case .tvSeries:
+            requiredStrings.append(RequiredString(
+                value: result.trackName,
+                identifiers: [
+                    .commonIdentifierAlbumName,
+                    .quickTimeUserDataAlbum,
+                    .iTunesMetadataAlbum,
+                ]
+            ))
+        }
+
+        self.requiredStrings = requiredStrings
+    }
+
+    func isSatisfied(by metadataItems: [AVMetadataItem]) async -> Bool {
+        for requiredString in requiredStrings {
+            var foundMatch = false
+
+            for item in metadataItems {
+                guard let identifier = item.identifier,
+                      requiredString.identifiers.contains(identifier)
+                else {
+                    continue
+                }
+
+                guard let value = try? await item.load(.stringValue) else {
+                    continue
+                }
+
+                if normalize(value) == normalize(requiredString.value) {
+                    foundMatch = true
+                    break
+                }
+            }
+
+            if !foundMatch {
+                return false
+            }
+        }
+
+        return true
+    }
+
+    private func normalize(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

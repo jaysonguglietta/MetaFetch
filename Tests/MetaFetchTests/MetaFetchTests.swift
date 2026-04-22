@@ -134,6 +134,64 @@ import Testing
     #expect(selection == nil)
 }
 
+@Test
+@MainActor
+func episodeSpecificTVSearchDoesNotAutoSelectSeriesFallback() async throws {
+    let seriesOnlyResult = makeResult(
+        id: 101,
+        title: "Severance",
+        year: "2022",
+        mediaKind: .tvSeries,
+        confidence: .exact,
+        summary: "Exact show match, but S02E04 was not found",
+        score: 150
+    )
+    let model = AppModel(searchService: StubSearchService(results: [seriesOnlyResult]))
+    let entry = MovieFileEntry(
+        fileURL: URL(fileURLWithPath: "/Shows/Severance/Severance.S02E04.mp4"),
+        mediaMode: .tvShow
+    )
+    entry.queryText = "Severance S02E04"
+
+    await model.search(file: entry)
+
+    #expect(entry.selectedResult == nil)
+    #expect(entry.statusMessage == "No exact episode found. Showing the closest series matches instead.")
+}
+
+@Test
+@MainActor
+func seriesOnlyEpisodeSelectionRequiresConfirmationBeforeSave() async throws {
+    let seriesOnlyResult = makeResult(
+        id: 101,
+        title: "Severance",
+        year: "2022",
+        mediaKind: .tvSeries,
+        confidence: .exact,
+        summary: "Exact show match, but S02E04 was not found",
+        score: 150
+    )
+    let entry = MovieFileEntry(
+        fileURL: URL(fileURLWithPath: "/Shows/Severance/Severance.S02E04.mp4"),
+        mediaMode: .tvShow
+    )
+    entry.queryText = "Severance S02E04"
+    entry.selectedResult = seriesOnlyResult
+
+    #expect(entry.requiresSeriesOnlySaveConfirmation)
+    #expect(!entry.canSave)
+
+    entry.allowsSeriesOnlySave = true
+
+    #expect(!entry.requiresSeriesOnlySaveConfirmation)
+    #expect(entry.canSave)
+
+    entry.queryText = "Severance S02E05"
+
+    #expect(entry.requiresSeriesOnlySaveConfirmation)
+    #expect(!entry.canSave)
+}
+
 @Test func importValidatorRequiresWritableRegularMP4Files() async throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("MetaFetchTests-\(UUID().uuidString)", isDirectory: true)
@@ -161,13 +219,14 @@ private func makeResult(
     id: Int,
     title: String,
     year: String,
+    mediaKind: MediaSearchKind = .movie,
     confidence: MatchConfidence,
     summary: String,
     score: Int
 ) -> MediaSearchResult {
     MediaSearchResult(
         trackId: id,
-        mediaKind: .movie,
+        mediaKind: mediaKind,
         trackName: title,
         seriesName: nil,
         artistName: "Test Director",
@@ -185,4 +244,12 @@ private func makeResult(
         seasonNumber: nil,
         episodeNumber: nil
     )
+}
+
+private struct StubSearchService: MediaSearchServing {
+    let results: [MediaSearchResult]
+
+    func search(matching query: String, mode: MediaLibraryMode) async throws -> [MediaSearchResult] {
+        results
+    }
 }

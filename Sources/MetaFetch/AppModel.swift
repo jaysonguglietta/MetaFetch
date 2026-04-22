@@ -51,7 +51,7 @@ final class AppModel: ObservableObject {
     }
 
     var canSaveAnyTaggedFiles: Bool {
-        files.contains(where: { $0.selectedResult != nil && !$0.isSaving })
+        files.contains(where: \.canSave)
     }
 
     var canChooseMode: Bool {
@@ -164,7 +164,11 @@ final class AppModel: ObservableObject {
                 file.selectedResult = refreshedSelection
                 preservedSelection = refreshedSelection
             } else {
-                file.selectedResult = SearchSelectionPolicy.suggestedAutoSelection(from: results)
+                file.selectedResult = suggestedAutoSelection(
+                    from: results,
+                    mode: file.mediaMode,
+                    parsedQuery: parsedQuery
+                )
                 preservedSelection = nil
             }
 
@@ -199,6 +203,12 @@ final class AppModel: ObservableObject {
     func save(file: MovieFileEntry) async {
         guard let selectedResult = file.selectedResult else {
             file.errorMessage = file.mediaMode.saveSelectionError
+            return
+        }
+
+        if file.requiresSeriesOnlySaveConfirmation {
+            file.errorMessage = "This is a series-level TV match for an episode query. Confirm the series-only save before writing metadata."
+            file.statusMessage = "Series-only save needs confirmation"
             return
         }
 
@@ -244,9 +254,27 @@ final class AppModel: ObservableObject {
     }
 
     func saveAllTaggedFiles() async {
-        for entry in files where entry.selectedResult != nil && !entry.isSaving {
+        for entry in files where entry.canSave {
             await save(file: entry)
         }
+    }
+
+    private func suggestedAutoSelection(
+        from results: [MediaSearchResult],
+        mode: MediaLibraryMode,
+        parsedQuery: ParsedMediaQuery
+    ) -> MediaSearchResult? {
+        guard let suggestedResult = SearchSelectionPolicy.suggestedAutoSelection(from: results) else {
+            return nil
+        }
+
+        guard !(mode == .tvShow &&
+                parsedQuery.isEpisodeSpecific &&
+                suggestedResult.mediaKind == .tvSeries) else {
+            return nil
+        }
+
+        return suggestedResult
     }
 
     private func advanceSelection(afterSaving savedFile: MovieFileEntry) {

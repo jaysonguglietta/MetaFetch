@@ -54,6 +54,8 @@ Severance Season 2/E04.mp4
 
 If MetaFetch shows `Series Only`, it found the show but not a specific episode. Add an episode code like `S02E04` to the search box and search again.
 
+If you intentionally want to save a series-level result to an episode file, MetaFetch asks you to confirm that choice before the save button is enabled.
+
 ## What Gets Written
 
 MetaFetch writes the selected title, description, genre when available, media kind, and artwork when poster saving is enabled.

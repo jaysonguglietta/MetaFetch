@@ -354,12 +354,13 @@ private struct WikimediaMovieSearchService {
 
     private func performRequest<Response: Decodable>(_ url: URL, decoding type: Response.Type) async throws -> Response {
         var request = URLRequest(url: url)
+        request.timeoutInterval = BoundedJSONRequest.timeoutInterval
         request.setValue(
             "MetaFetch/1.0 (macOS app for tagging MP4 movie files and TV episodes)",
             forHTTPHeaderField: "User-Agent"
         )
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await BoundedJSONRequest.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw SearchError.invalidResponse
@@ -800,12 +801,13 @@ private struct TVMazeSearchService {
 
     private func performRequest<Response: Decodable>(_ url: URL, decoding type: Response.Type) async throws -> Response {
         var request = URLRequest(url: url)
+        request.timeoutInterval = BoundedJSONRequest.timeoutInterval
         request.setValue(
             "MetaFetch/1.0 (macOS app for tagging MP4 movie files and TV episodes)",
             forHTTPHeaderField: "User-Agent"
         )
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await BoundedJSONRequest.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw SearchError.invalidResponse
@@ -823,12 +825,13 @@ private struct TVMazeSearchService {
         decoding type: Response.Type
     ) async throws -> Response? {
         var request = URLRequest(url: url)
+        request.timeoutInterval = BoundedJSONRequest.timeoutInterval
         request.setValue(
             "MetaFetch/1.0 (macOS app for tagging MP4 movie files and TV episodes)",
             forHTTPHeaderField: "User-Agent"
         )
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await BoundedJSONRequest.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw SearchError.invalidResponse
@@ -1096,4 +1099,31 @@ private func normalizedImageName(_ text: String) -> String {
         .replacingOccurrences(of: "_", with: " ")
         .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
         .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private enum BoundedJSONRequest {
+    static let timeoutInterval: TimeInterval = 15
+    private static let maximumResponseBytes = 4 * 1024 * 1024
+
+    static func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+
+        if response.expectedContentLength > maximumResponseBytes {
+            throw URLError(.dataLengthExceedsMaximum)
+        }
+
+        var data = Data()
+        if response.expectedContentLength > 0 {
+            data.reserveCapacity(min(Int(response.expectedContentLength), maximumResponseBytes))
+        }
+
+        for try await byte in bytes {
+            data.append(byte)
+            if data.count > maximumResponseBytes {
+                throw URLError(.dataLengthExceedsMaximum)
+            }
+        }
+
+        return (data, response)
+    }
 }

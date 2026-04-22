@@ -6,13 +6,26 @@ final class MovieFileEntry: ObservableObject, Identifiable {
     let fileURL: URL
     let mediaMode: MediaLibraryMode
 
-    @Published var queryText: String
+    @Published var queryText: String {
+        didSet {
+            if queryText != oldValue {
+                allowsSeriesOnlySave = false
+            }
+        }
+    }
     @Published var searchResults: [MediaSearchResult] = []
-    @Published var selectedResult: MediaSearchResult?
+    @Published var selectedResult: MediaSearchResult? {
+        didSet {
+            if selectedResult?.id != oldValue?.id {
+                allowsSeriesOnlySave = false
+            }
+        }
+    }
     @Published var isSearching = false
     @Published var isSaving = false
     @Published var saveProgress: Double?
     @Published var includeArtworkWhenSaving = true
+    @Published var allowsSeriesOnlySave = false
     @Published var errorMessage: String?
     @Published var statusMessage: String
     @Published var lastSavedAt: Date?
@@ -32,7 +45,7 @@ final class MovieFileEntry: ObservableObject, Identifiable {
     }
 
     var canSave: Bool {
-        selectedResult != nil && !isSaving
+        selectedResult != nil && !isSaving && !requiresSeriesOnlySaveConfirmation
     }
 
     var hasSelectedArtwork: Bool {
@@ -84,12 +97,30 @@ final class MovieFileEntry: ObservableObject, Identifiable {
             return nil
         }
 
-        let parsedQuery = FilenameTitleParser.parsedManualQuery(queryText, mode: mediaMode)
+        let parsedQuery = parsedCurrentQuery
         if let episodeCode = parsedQuery.episodeCode {
             return "Detected episode \(episodeCode)"
         }
 
         return "No episode code found. MetaFetch will search series-level matches until you add something like S01E03."
+    }
+
+    var requiresSeriesOnlySaveConfirmation: Bool {
+        isSeriesOnlySelectionForEpisodeQuery && !allowsSeriesOnlySave
+    }
+
+    var isSeriesOnlySelectionForEpisodeQuery: Bool {
+        guard mediaMode == .tvShow,
+              parsedCurrentQuery.isEpisodeSpecific,
+              selectedResult?.mediaKind == .tvSeries else {
+            return false
+        }
+
+        return true
+    }
+
+    var parsedCurrentQuery: ParsedMediaQuery {
+        FilenameTitleParser.parsedManualQuery(queryText, mode: mediaMode)
     }
 
     var batchReviewLabel: String {
@@ -137,6 +168,10 @@ final class MovieFileEntry: ObservableObject, Identifiable {
         }
 
         if selectedResult != nil {
+            if requiresSeriesOnlySaveConfirmation {
+                return "Series only • Confirm to save"
+            }
+
             return batchReviewLabel
         }
 

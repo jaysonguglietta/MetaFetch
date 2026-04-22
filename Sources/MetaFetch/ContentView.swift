@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -1083,6 +1084,32 @@ private struct SelectionPreviewCard: View {
                         .foregroundStyle(RetroTheme.muted)
                 }
 
+                if entry.isSeriesOnlySelectionForEpisodeQuery {
+                    VStack(alignment: .leading, spacing: 10) {
+                        RetroPill(text: "Series Only", accent: RetroTheme.gold)
+
+                        Text("This match is for the series, not the requested episode. Saving it will write show-level metadata into this MP4.")
+                            .font(RetroTheme.bodyFont(13))
+                            .foregroundStyle(RetroTheme.paper)
+
+                        if entry.requiresSeriesOnlySaveConfirmation {
+                            Button("Allow Series-Only Save") {
+                                entry.allowsSeriesOnlySave = true
+                                entry.errorMessage = nil
+                                entry.statusMessage = "Series-only save confirmed"
+                            }
+                            .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+                        } else {
+                            Text("Series-only save confirmed for this selection.")
+                                .font(RetroTheme.labelFont(12))
+                                .tracking(1.8)
+                                .foregroundStyle(RetroTheme.lime)
+                        }
+                    }
+                    .padding(14)
+                    .retroPanel(accent: RetroTheme.gold)
+                }
+
                 Button(action: saveAction) {
                     if entry.isSaving {
                         Label("Saving Metadata...", systemImage: "arrow.trianglehead.2.clockwise")
@@ -1361,20 +1388,19 @@ private struct ArtworkView: View {
     let width: CGFloat
     let height: CGFloat
     let accent: Color
+    @State private var artworkData: Data?
+    @State private var isLoading = false
 
     var body: some View {
-        AsyncImage(url: url) { phase in
-            switch phase {
-            case .empty:
-                placeholder
-            case .success(let image):
-                image
+        Group {
+            if let artworkData,
+               let nsImage = NSImage(data: artworkData) {
+                Image(nsImage: nsImage)
                     .resizable()
                     .scaledToFill()
-            case .failure:
+            } else {
                 placeholder
-            @unknown default:
-                placeholder
+                    .opacity(isLoading ? 0.72 : 1)
             }
         }
         .frame(width: width, height: height)
@@ -1384,6 +1410,29 @@ private struct ArtworkView: View {
                 .strokeBorder(accent.opacity(0.85), lineWidth: 2)
         )
         .shadow(color: accent.opacity(0.20), radius: 14, x: 0, y: 12)
+        .task(id: url) {
+            await loadArtwork()
+        }
+    }
+
+    @MainActor
+    private func loadArtwork() async {
+        artworkData = nil
+        guard let url else {
+            isLoading = false
+            return
+        }
+
+        isLoading = true
+        defer {
+            isLoading = false
+        }
+
+        do {
+            artworkData = try await ArtworkPipeline.shared.preparedArtwork(for: url)
+        } catch {
+            artworkData = nil
+        }
     }
 
     private var placeholder: some View {
