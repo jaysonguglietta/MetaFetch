@@ -4,6 +4,8 @@ MetaFetch tags MP4 files with movie or TV episode metadata. It does not delete y
 
 Before writing metadata, MetaFetch creates a temporary safety backup next to the original file. The backup is deleted after a successful save, but may remain as `Movie.metafetch-backup-<id>.mp4` if a save fails or the app is interrupted.
 
+After every save, MetaFetch reads the MP4 back and verifies that core tags such as title and show name actually persisted. If a metadata-only fast save reports success but the tags are not readable afterward, MetaFetch restores the original from the temporary backup and falls back to a full container rewrite instead of silently leaving the file untagged.
+
 ## Choose A Deck
 
 When MetaFetch opens, choose one mode:
@@ -85,6 +87,16 @@ Use `Open Source` on result cards to inspect the source page before choosing a m
 
 `Save Metadata + Poster` includes artwork. This usually takes longer because AVFoundation may need to write a new MP4 container. The video and audio are passed through rather than re-encoded.
 
+Fast saves work best when the MP4 has free space near the front of the container for metadata growth. Files converted with only `-movflags +faststart` often have a front `moov` atom but almost no padding, so larger tags or artwork may require a full rewrite.
+
+If you create MP4s with FFmpeg before using MetaFetch, reserve metadata headroom during conversion:
+
+```bash
+-moov_size 16777216
+```
+
+That reserves about 16 MiB for later metadata edits. You can still lower this value if you never save artwork, or raise it if you use large posters.
+
 ## In-App Help
 
 Use the `Help` toolbar button for a quick version of this guide inside MetaFetch. You can also choose `Help > MetaFetch Help` from the macOS menu bar or press `Command-Shift-?`.
@@ -100,6 +112,8 @@ Use the `Help` toolbar button for a quick version of this guide inside MetaFetch
 - If TV mode only finds the series, add an episode code like `S01E03`.
 - If the sidebar is hidden, use `Hide Sidebar` / `Show Sidebar` in the toolbar.
 - If saving is slow, turn off poster artwork and use `Fast Save Metadata`.
+- If a backup remains after saving, the save likely failed verification or was interrupted. The original should have been restored, and the backup is kept as a recovery copy.
+- If a newly converted MP4 never accepts tags quickly, rebuild it with MP4 metadata headroom such as `-moov_size 16777216`.
 - If the app feels stuck on a bad batch, use `Start Over` to clear the queue and choose a mode again.
 - If you see old `.metafetch-backup-*` files, they are recovery copies from a failed or interrupted save. Confirm the original MP4 looks right, then remove the backup when you are comfortable.
 

@@ -7,6 +7,7 @@ This is a practical roadmap for turning MetaFetch from a fast tagging utility in
 - Backup management: Add preferences for where temporary safety backups are stored and how interrupted-save recovery copies should be cleaned up.
 - Manual metadata editor: Let users tweak title, sort title, synopsis, genre, release date, artwork, season, and episode before saving.
 - Save report: After `Save All Tagged`, show which files saved, failed, used fast metadata-only writes, or needed full MP4 rewrites.
+- MP4 headroom check: Detect files with little or no metadata padding and explain when a full rewrite will be required.
 - Batch folder import: Let users drop a season folder and automatically detect show, season, and episode from folder context.
 
 ## Usability Polish
