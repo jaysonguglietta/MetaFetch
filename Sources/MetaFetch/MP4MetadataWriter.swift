@@ -61,6 +61,7 @@ struct MP4MetadataWriter: MetadataWriting {
                 )
 
                 if usedFastPath {
+                    await removeSafetyBackup(at: safetyBackupURL, progressHandler: progressHandler)
                     return
                 }
             }
@@ -108,6 +109,8 @@ struct MP4MetadataWriter: MetadataWriting {
                 backupItemName: nil,
                 options: []
             )
+
+            await removeSafetyBackup(at: safetyBackupURL, progressHandler: progressHandler)
         } catch {
             try? restoreOriginal(from: safetyBackupURL, to: fileURL)
             throw error
@@ -181,6 +184,18 @@ struct MP4MetadataWriter: MetadataWriting {
         let backupURL = safetyBackupURL(for: fileURL)
         try FileManager.default.copyItem(at: fileURL, to: backupURL)
         return backupURL
+    }
+
+    private func removeSafetyBackup(
+        at backupURL: URL,
+        progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)?
+    ) async {
+        await progressHandler?(makeProgressUpdate(
+            fractionCompleted: 0.99,
+            message: "Cleaning up temporary safety backup"
+        ))
+
+        try? FileManager.default.removeItem(at: backupURL)
     }
 
     private func safetyBackupURL(for fileURL: URL) -> URL {
