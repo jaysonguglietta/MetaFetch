@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="MetaFetch"
+ICON_NAME="metafetch-app-icon"
 BUILD_DIR="$ROOT_DIR/.build"
 APP_DIR="$ROOT_DIR/dist/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
@@ -28,6 +29,10 @@ if [ -f "$ROOT_DIR/Branding/metafetch-logo.svg" ]; then
   cp "$ROOT_DIR/Branding/metafetch-logo.svg" "$RESOURCES_DIR/metafetch-logo.svg"
 fi
 
+if [ -f "$ROOT_DIR/Branding/$ICON_NAME.icns" ]; then
+  cp "$ROOT_DIR/Branding/$ICON_NAME.icns" "$RESOURCES_DIR/$ICON_NAME.icns"
+fi
+
 cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -37,6 +42,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
     <string>en</string>
     <key>CFBundleExecutable</key>
     <string>MetaFetch</string>
+    <key>CFBundleIconFile</key>
+    <string>metafetch-app-icon</string>
     <key>CFBundleIdentifier</key>
     <string>com.jaysonguglietta.metafetch</string>
     <key>CFBundleInfoDictionaryVersion</key>
