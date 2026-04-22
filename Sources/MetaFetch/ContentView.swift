@@ -6,6 +6,7 @@ struct ContentView: View {
     @StateObject private var model = AppModel()
     @State private var isSidebarVisible = true
     @State private var isHelpPresented = false
+    @State private var isUpdatePresented = false
     @State private var isStartOverConfirmationPresented = false
 
     var body: some View {
@@ -53,6 +54,11 @@ struct ContentView: View {
                     isHelpPresented = true
                 }
 
+                Button("Updates", systemImage: "arrow.down.circle") {
+                    presentUpdateCheck()
+                }
+                .disabled(model.updateState.isBusy)
+
                 if let selectedMode = model.selectedMode, model.canChooseMode {
                     Menu(selectedMode.displayName) {
                         ForEach(MediaLibraryMode.allCases) { mode in
@@ -95,8 +101,14 @@ struct ContentView: View {
         .sheet(isPresented: $isHelpPresented) {
             HelpView(currentMode: model.selectedMode)
         }
+        .sheet(isPresented: $isUpdatePresented) {
+            UpdateView(model: model)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .showMetaFetchHelp)) { _ in
             isHelpPresented = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .checkForMetaFetchUpdates)) { _ in
+            presentUpdateCheck()
         }
         .confirmationDialog(
             "Start over?",
@@ -110,6 +122,14 @@ struct ContentView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This only removes files from MetaFetch’s current queue. It does not delete or modify your MP4 files.")
+        }
+    }
+
+    private func presentUpdateCheck() {
+        isUpdatePresented = true
+
+        Task {
+            await model.checkForUpdates()
         }
     }
 }
@@ -1263,6 +1283,17 @@ private struct HelpView: View {
                     )
 
                     HelpSection(
+                        title: "Updates",
+                        accent: RetroTheme.cyan,
+                        rows: [
+                            "Use Updates in the toolbar or Check for Updates from the app menu to look for newer GitHub releases.",
+                            "MetaFetch compares the installed app version with the latest GitHub release tag.",
+                            "When a release has a DMG, ZIP, or PKG asset, MetaFetch can download it to Downloads and open it.",
+                            "Installer replacement still stays visible and user-confirmed, which is safer than silently replacing a running app.",
+                        ]
+                    )
+
+                    HelpSection(
                         title: "Troubleshooting",
                         accent: RetroTheme.magenta,
                         rows: [
@@ -1288,7 +1319,7 @@ private struct HelpView: View {
                         title: "Good Next Upgrades",
                         accent: RetroTheme.gold,
                         rows: [
-                            "Backup cleanup preferences would help manage recovery copies left behind by interrupted saves.",
+                            "An optional safety mode could create recovery backups for users who prefer protection over fastest saves.",
                             "A manual metadata editor would let you tweak title, synopsis, genre, and artwork before saving.",
                             "Batch folder scanning could auto-group shows by series and season.",
                             "A save report could list which files used fast metadata saves versus full MP4 rewrites.",
@@ -1301,6 +1332,199 @@ private struct HelpView: View {
         }
         .preferredColorScheme(.dark)
         .frame(minWidth: 720, minHeight: 640)
+    }
+}
+
+private struct UpdateView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        ZStack {
+            RetroBackdrop()
+
+            VStack(alignment: .leading, spacing: 24) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        MetaFetchLogoLockup(
+                            markSize: 44,
+                            wordmarkSize: 28,
+                            subtitle: "release radar"
+                        )
+
+                        Text("MetaFetch Updates")
+                            .font(RetroTheme.heroFont(38))
+                            .foregroundStyle(RetroTheme.paper)
+
+                        Text("Installed version \(model.currentAppVersion)")
+                            .font(RetroTheme.bodyFont(16))
+                            .foregroundStyle(RetroTheme.muted)
+                    }
+
+                    Spacer()
+
+                    Button("Close") {
+                        dismiss()
+                    }
+                    .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+                }
+
+                updateBody
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(20)
+                    .retroPanel(accent: accent)
+
+                HStack {
+                    Button("Check Again") {
+                        Task {
+                            await model.checkForUpdates()
+                        }
+                    }
+                    .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.cyan))
+                    .disabled(model.updateState.isBusy)
+
+                    Spacer()
+
+                    if case .available(let update) = model.updateState {
+                        Button(update.asset == nil ? "Open Release Page" : "Download And Open") {
+                            if update.asset == nil {
+                                model.openReleasePage(for: update)
+                            } else {
+                                Task {
+                                    await model.downloadAvailableUpdate()
+                                }
+                            }
+                        }
+                        .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.lime))
+                    }
+
+                    if case .downloaded(_, let fileURL) = model.updateState {
+                        Button("Open Download") {
+                            model.openDownloadedUpdate(at: fileURL)
+                        }
+                        .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.lime))
+                    }
+                }
+            }
+            .padding(28)
+        }
+        .preferredColorScheme(.dark)
+        .frame(minWidth: 680, minHeight: 520)
+    }
+
+    @ViewBuilder
+    private var updateBody: some View {
+        switch model.updateState {
+        case .idle:
+            updateMessage(
+                eyebrow: "Ready",
+                title: "Check GitHub Releases",
+                message: "MetaFetch can check the latest GitHub release, compare versions, and download the installer asset when one is available."
+            )
+        case .checking:
+            VStack(alignment: .leading, spacing: 16) {
+                updateMessage(
+                    eyebrow: "Checking",
+                    title: "Looking For A Newer Release",
+                    message: "MetaFetch is asking GitHub for the latest published release."
+                )
+
+                ProgressView()
+                    .progressViewStyle(.linear)
+            }
+        case .upToDate(let version):
+            updateMessage(
+                eyebrow: "Current",
+                title: "No Newer Release Found",
+                message: "The latest GitHub release is \(version). Your installed version \(model.currentAppVersion) does not need an update."
+            )
+        case .available(let update):
+            VStack(alignment: .leading, spacing: 14) {
+                updateMessage(
+                    eyebrow: "Available",
+                    title: "Version \(update.version) Is Ready",
+                    message: update.asset == nil
+                        ? "GitHub has a newer release, but it does not include a .dmg, .zip, or .pkg asset. Open the release page to download it manually."
+                        : "MetaFetch can download \(update.asset?.name ?? "the installer") to your Downloads folder and open it."
+                )
+
+                releaseNotes(for: update)
+            }
+        case .downloading(let update):
+            VStack(alignment: .leading, spacing: 16) {
+                updateMessage(
+                    eyebrow: "Downloading",
+                    title: "Fetching Version \(update.version)",
+                    message: "The update is downloading from GitHub. MetaFetch will open it when the download finishes."
+                )
+
+                ProgressView()
+                    .progressViewStyle(.linear)
+            }
+        case .downloaded(let update, let fileURL):
+            VStack(alignment: .leading, spacing: 14) {
+                updateMessage(
+                    eyebrow: "Downloaded",
+                    title: "Version \(update.version) Is In Downloads",
+                    message: "The installer was downloaded and opened. If macOS did not bring it forward, open it again from: \(fileURL.path)"
+                )
+
+                releaseNotes(for: update)
+            }
+        case .failed(let message):
+            updateMessage(
+                eyebrow: "Update Check Failed",
+                title: "Couldn’t Finish The Update Flow",
+                message: message
+            )
+        }
+    }
+
+    private var accent: Color {
+        switch model.updateState {
+        case .available, .downloaded:
+            return RetroTheme.lime
+        case .failed:
+            return RetroTheme.magenta
+        case .checking, .downloading:
+            return RetroTheme.cyan
+        case .idle, .upToDate:
+            return RetroTheme.gold
+        }
+    }
+
+    private func updateMessage(eyebrow: String, title: String, message: String) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            RetroSectionTitle(eyebrow: eyebrow, title: title, accent: accent)
+
+            Text(message)
+                .font(RetroTheme.bodyFont(16))
+                .foregroundStyle(RetroTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func releaseNotes(for update: AppUpdate) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(update.name.uppercased())
+                .font(RetroTheme.labelFont(13))
+                .tracking(2.2)
+                .foregroundStyle(RetroTheme.gold)
+
+            ScrollView {
+                Text(update.releaseNotes)
+                    .font(RetroTheme.bodyFont(14))
+                    .foregroundStyle(RetroTheme.paper)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+            .frame(maxHeight: 150)
+
+            Button("Open Release Page") {
+                model.openReleasePage(for: update)
+            }
+            .buttonStyle(.link)
+        }
     }
 }
 

@@ -26,6 +26,12 @@ struct MetaFetchApp: App {
                 .frame(minWidth: 1080, minHeight: 720)
         }
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates...") {
+                    NotificationCenter.default.post(name: .checkForMetaFetchUpdates, object: nil)
+                }
+            }
+
             CommandGroup(replacing: .help) {
                 Button("MetaFetch Help") {
                     NotificationCenter.default.post(name: .showMetaFetchHelp, object: nil)

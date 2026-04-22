@@ -13,7 +13,8 @@ MetaFetch is a native macOS SwiftUI app for tagging `.mp4` files with movie or T
 - Write title, synopsis, genre, artwork, and movie or episode-specific metadata back to the MP4.
 - Use a fast metadata-only save path when artwork is off and the file supports it.
 - Verify saved metadata by reading the MP4 back after writing, then fall back safely if a fast save does not stick.
-- Use temporary recovery backups during writes and clean them up automatically after verified success.
+- Prioritize speed by writing without creating sidecar safety backups.
+- Check GitHub Releases for newer versions, download an installer asset, and open it for user-confirmed installation.
 
 ## Run
 
@@ -46,6 +47,24 @@ Build the local app bundle:
 ```bash
 ./Scripts/build_app.sh
 ```
+
+Build with release version metadata:
+
+```bash
+APP_VERSION=1.1 APP_BUILD=2 ./Scripts/build_app.sh
+```
+
+## Updates
+
+MetaFetch checks `jaysonguglietta/MetaFetch` GitHub Releases. A release is considered newer when its tag, such as `v1.1` or `1.1`, is greater than the app’s `CFBundleShortVersionString`.
+
+For in-app downloads, attach one installable asset to the GitHub release:
+
+- `.dmg`
+- `.zip`
+- `.pkg`
+
+MetaFetch downloads the asset to the user’s Downloads folder and opens it. The final app replacement remains visible and user-confirmed instead of silently replacing a running app.
 
 ## Data Sources
 

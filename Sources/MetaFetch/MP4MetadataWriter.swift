@@ -49,87 +49,74 @@ struct MP4MetadataWriter: MetadataWriting {
         progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)? = nil
     ) async throws {
         let metadataItems = try await buildMetadataItems(for: result, includeArtwork: includeArtwork)
-        let safetyBackupURL = try await createSafetyBackup(
-            for: fileURL,
-            progressHandler: progressHandler
-        )
 
-        do {
-            if !includeArtwork {
-                let usedFastPath = await attemptMetadataOnlyFastPath(
-                    to: fileURL,
-                    metadataItems: metadataItems,
-                    verificationExpectation: MetadataVerificationExpectation(result: result),
-                    safetyBackupURL: safetyBackupURL,
-                    progressHandler: progressHandler
-                )
-
-                if usedFastPath {
-                    await removeSafetyBackup(at: safetyBackupURL, progressHandler: progressHandler)
-                    return
-                }
-            }
-
-            let asset = AVURLAsset(url: fileURL)
-
-            guard let exportSession = AVAssetExportSession(
-                asset: asset,
-                presetName: AVAssetExportPresetPassthrough
-            ) else {
-                throw WriterError.exportSessionUnavailable
-            }
-
-            guard exportSession.supportedFileTypes.contains(outputFileType) else {
-                throw WriterError.unsupportedFileType
-            }
-
-            let temporaryURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString)
-                .appendingPathExtension("mp4")
-
-            exportSession.shouldOptimizeForNetworkUse = false
-            exportSession.metadata = metadataItems
-
-            await progressHandler?(makeProgressUpdate(
-                fractionCompleted: 0,
-                message: "Starting MP4 container rewrite"
-            ))
-
-            try await export(
-                session: exportSession,
-                to: temporaryURL,
-                fileType: outputFileType,
+        if !includeArtwork {
+            let usedFastPath = await attemptMetadataOnlyFastPath(
+                to: fileURL,
+                metadataItems: metadataItems,
+                verificationExpectation: MetadataVerificationExpectation(result: result),
                 progressHandler: progressHandler
             )
 
-            await progressHandler?(makeProgressUpdate(
-                fractionCompleted: 0.98,
-                message: "Replacing the original file with the tagged copy"
-            ))
-
-            _ = try FileManager.default.replaceItemAt(
-                fileURL,
-                withItemAt: temporaryURL,
-                backupItemName: nil,
-                options: []
-            )
-
-            await progressHandler?(makeProgressUpdate(
-                fractionCompleted: 0.99,
-                message: "Verifying saved metadata"
-            ))
-
-            guard await metadataWasPersisted(
-                at: fileURL,
-                expectation: MetadataVerificationExpectation(result: result)
-            ) else {
-                throw WriterError.metadataVerificationFailed
+            if usedFastPath {
+                return
             }
+        }
 
-            await removeSafetyBackup(at: safetyBackupURL, progressHandler: progressHandler)
-        } catch {
-            try? restoreOriginal(from: safetyBackupURL, to: fileURL)
-            throw error
+        let asset = AVURLAsset(url: fileURL)
+
+        guard let exportSession = AVAssetExportSession(
+            asset: asset,
+            presetName: AVAssetExportPresetPassthrough
+        ) else {
+            throw WriterError.exportSessionUnavailable
+        }
+
+        guard exportSession.supportedFileTypes.contains(outputFileType) else {
+            throw WriterError.unsupportedFileType
+        }
+
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("mp4")
+
+        exportSession.shouldOptimizeForNetworkUse = false
+        exportSession.metadata = metadataItems
+
+        await progressHandler?(makeProgressUpdate(
+            fractionCompleted: 0,
+            message: "Starting MP4 container rewrite"
+        ))
+
+        try await export(
+            session: exportSession,
+            to: temporaryURL,
+            fileType: outputFileType,
+            progressHandler: progressHandler
+        )
+
+        await progressHandler?(makeProgressUpdate(
+            fractionCompleted: 0.98,
+            message: "Replacing the original file with the tagged copy"
+        ))
+
+        _ = try FileManager.default.replaceItemAt(
+            fileURL,
+            withItemAt: temporaryURL,
+            backupItemName: nil,
+            options: []
+        )
+
+        await progressHandler?(makeProgressUpdate(
+            fractionCompleted: 0.99,
+            message: "Verifying saved metadata"
+        ))
+
+        guard await metadataWasPersisted(
+            at: fileURL,
+            expectation: MetadataVerificationExpectation(result: result)
+        ) else {
+            throw WriterError.metadataVerificationFailed
         }
     }
 
@@ -137,7 +124,6 @@ struct MP4MetadataWriter: MetadataWriting {
         to fileURL: URL,
         metadataItems: [AVMetadataItem],
         verificationExpectation: MetadataVerificationExpectation,
-        safetyBackupURL: URL,
         progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)?
     ) async -> Bool {
         await progressHandler?(makeProgressUpdate(
@@ -183,7 +169,6 @@ struct MP4MetadataWriter: MetadataWriting {
                 at: fileURL,
                 expectation: verificationExpectation
             ) else {
-                try? restoreOriginal(from: safetyBackupURL, to: fileURL)
                 await progressHandler?(makeProgressUpdate(
                     fractionCompleted: 0.08,
                     message: "Metadata-only save did not verify, falling back to full rewrite"
@@ -197,70 +182,11 @@ struct MP4MetadataWriter: MetadataWriting {
             ))
             return true
         } catch {
-            try? restoreOriginal(from: safetyBackupURL, to: fileURL)
             await progressHandler?(makeProgressUpdate(
                 fractionCompleted: 0.08,
                 message: "Fast path failed, falling back to full container rewrite"
             ))
             return false
-        }
-    }
-
-    private func createSafetyBackup(
-        for fileURL: URL,
-        progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)?
-    ) async throws -> URL {
-        await progressHandler?(makeProgressUpdate(
-            fractionCompleted: 0.01,
-            message: "Creating safety backup before writing metadata"
-        ))
-
-        let backupURL = safetyBackupURL(for: fileURL)
-        try FileManager.default.copyItem(at: fileURL, to: backupURL)
-        return backupURL
-    }
-
-    private func removeSafetyBackup(
-        at backupURL: URL,
-        progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)?
-    ) async {
-        await progressHandler?(makeProgressUpdate(
-            fractionCompleted: 0.99,
-            message: "Cleaning up temporary safety backup"
-        ))
-
-        try? FileManager.default.removeItem(at: backupURL)
-    }
-
-    private func safetyBackupURL(for fileURL: URL) -> URL {
-        let directoryURL = fileURL.deletingLastPathComponent()
-        let baseName = fileURL.deletingPathExtension().lastPathComponent
-        let fileExtension = fileURL.pathExtension.isEmpty ? "mp4" : fileURL.pathExtension
-        let backupName = "\(baseName).metafetch-backup-\(UUID().uuidString).\(fileExtension)"
-        return directoryURL.appendingPathComponent(backupName)
-    }
-
-    private func restoreOriginal(from backupURL: URL, to fileURL: URL) throws {
-        let restoreURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension(fileURL.pathExtension.isEmpty ? "mp4" : fileURL.pathExtension)
-
-        try FileManager.default.copyItem(at: backupURL, to: restoreURL)
-        defer {
-            if FileManager.default.fileExists(atPath: restoreURL.path) {
-                try? FileManager.default.removeItem(at: restoreURL)
-            }
-        }
-
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            _ = try FileManager.default.replaceItemAt(
-                fileURL,
-                withItemAt: restoreURL,
-                backupItemName: nil,
-                options: []
-            )
-        } else {
-            try FileManager.default.moveItem(at: restoreURL, to: fileURL)
         }
     }
 

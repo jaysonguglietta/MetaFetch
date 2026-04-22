@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -30,16 +31,20 @@ final class AppModel: ObservableObject {
     @Published var isFileImporterPresented = false
     @Published var noticeMessage: String?
     @Published var selectedMode: MediaLibraryMode?
+    @Published var updateState: AppUpdateState = .idle
 
     private let searchService: MediaSearchServing
     private let metadataWriter: MetadataWriting
+    private let updateService: AppUpdateChecking
 
     init(
         searchService: MediaSearchServing = MetadataCatalogSearchService(),
-        metadataWriter: MetadataWriting = MP4MetadataWriter()
+        metadataWriter: MetadataWriting = MP4MetadataWriter(),
+        updateService: AppUpdateChecking = GitHubReleaseUpdateService()
     ) {
         self.searchService = searchService
         self.metadataWriter = metadataWriter
+        self.updateService = updateService
     }
 
     var selectedFile: MovieFileEntry? {
@@ -56,6 +61,10 @@ final class AppModel: ObservableObject {
 
     var canChooseMode: Bool {
         files.isEmpty
+    }
+
+    var currentAppVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
     }
 
     func chooseMode(_ mode: MediaLibraryMode) {
@@ -257,6 +266,50 @@ final class AppModel: ObservableObject {
         for entry in files where entry.canSave {
             await save(file: entry)
         }
+    }
+
+    func checkForUpdates() async {
+        guard !updateState.isBusy else {
+            return
+        }
+
+        updateState = .checking
+
+        do {
+            switch try await updateService.checkForUpdate(currentVersion: currentAppVersion) {
+            case .upToDate(let version):
+                updateState = .upToDate(version: version)
+            case .available(let update):
+                updateState = .available(update)
+            }
+        } catch {
+            updateState = .failed(error.localizedDescription)
+        }
+    }
+
+    func downloadAvailableUpdate() async {
+        guard case .available(let update) = updateState,
+              !updateState.isBusy else {
+            return
+        }
+
+        updateState = .downloading(update)
+
+        do {
+            let fileURL = try await updateService.download(update: update)
+            updateState = .downloaded(update, fileURL: fileURL)
+            openDownloadedUpdate(at: fileURL)
+        } catch {
+            updateState = .failed(error.localizedDescription)
+        }
+    }
+
+    func openReleasePage(for update: AppUpdate) {
+        NSWorkspace.shared.open(update.releaseURL)
+    }
+
+    func openDownloadedUpdate(at fileURL: URL) {
+        NSWorkspace.shared.open(fileURL)
     }
 
     private func suggestedAutoSelection(

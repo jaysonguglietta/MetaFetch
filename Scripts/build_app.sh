@@ -5,6 +5,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="MetaFetch"
 ICON_NAME="metafetch-app-icon"
+APP_VERSION="${APP_VERSION:-1.0}"
+APP_BUILD="${APP_BUILD:-1}"
 BUILD_DIR="$ROOT_DIR/.build"
 APP_DIR="$ROOT_DIR/dist/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
@@ -33,7 +35,7 @@ if [ -f "$ROOT_DIR/Branding/$ICON_NAME.icns" ]; then
   cp "$ROOT_DIR/Branding/$ICON_NAME.icns" "$RESOURCES_DIR/$ICON_NAME.icns"
 fi
 
-cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
+cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -53,9 +55,9 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>$APP_VERSION</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>$APP_BUILD</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>

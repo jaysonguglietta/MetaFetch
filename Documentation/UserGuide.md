@@ -2,9 +2,9 @@
 
 MetaFetch tags MP4 files with movie or TV episode metadata. It does not delete your files. When saving, it updates the original file in place when possible or writes a tagged temporary copy through AVFoundation and replaces the original when needed.
 
-Before writing metadata, MetaFetch creates a temporary safety backup next to the original file. The backup is deleted after a successful save, but may remain as `Movie.metafetch-backup-<id>.mp4` if a save fails or the app is interrupted.
+For speed, MetaFetch does not create a sidecar safety backup before saving. Metadata-only saves write directly to the original MP4 header. Full container rewrites still write a temporary tagged copy first, then replace the original when export finishes.
 
-After every save, MetaFetch reads the MP4 back and verifies that core tags such as title and show name actually persisted. If a metadata-only fast save reports success but the tags are not readable afterward, MetaFetch restores the original from the temporary backup and falls back to a full container rewrite instead of silently leaving the file untagged.
+After every save, MetaFetch reads the MP4 back and verifies that core tags such as title and show name actually persisted. If a metadata-only fast save reports success but the tags are not readable afterward, MetaFetch falls back to a full container rewrite instead of silently leaving the file untagged.
 
 ## Choose A Deck
 
@@ -101,6 +101,16 @@ That reserves about 16 MiB for later metadata edits. You can still lower this va
 
 Use the `Help` toolbar button for a quick version of this guide inside MetaFetch. You can also choose `Help > MetaFetch Help` from the macOS menu bar or press `Command-Shift-?`.
 
+## Updates
+
+Use `Updates` in the toolbar or `Check for Updates...` from the app menu to ask GitHub whether a newer MetaFetch release is available.
+
+MetaFetch compares the installed app version with the latest release tag in `jaysonguglietta/MetaFetch`. Tags like `v1.1` and `1.1` are both understood as version `1.1`.
+
+If the newer release includes a `.dmg`, `.zip`, or `.pkg` asset, MetaFetch can download it to your Downloads folder and open it. The final install remains visible and user-confirmed so macOS does not silently replace the app while it is running.
+
+If the update checker says a release has no installable asset, open the release page and download the app manually.
+
 ## Keyboard Shortcuts
 
 - `Command-Shift-?`: Open MetaFetch Help.
@@ -112,10 +122,10 @@ Use the `Help` toolbar button for a quick version of this guide inside MetaFetch
 - If TV mode only finds the series, add an episode code like `S01E03`.
 - If the sidebar is hidden, use `Hide Sidebar` / `Show Sidebar` in the toolbar.
 - If saving is slow, turn off poster artwork and use `Fast Save Metadata`.
-- If a backup remains after saving, the save likely failed verification or was interrupted. The original should have been restored, and the backup is kept as a recovery copy.
 - If a newly converted MP4 never accepts tags quickly, rebuild it with MP4 metadata headroom such as `-moov_size 16777216`.
+- If update checking fails, confirm you can reach GitHub and that the latest release includes a `.dmg`, `.zip`, or `.pkg` asset.
 - If the app feels stuck on a bad batch, use `Start Over` to clear the queue and choose a mode again.
-- If you see old `.metafetch-backup-*` files, they are recovery copies from a failed or interrupted save. Confirm the original MP4 looks right, then remove the backup when you are comfortable.
+- If you see old `.metafetch-backup-*` files, they came from an earlier MetaFetch build and are no longer created by the current speed-first save path.
 
 ## Feature Suggestions
 
