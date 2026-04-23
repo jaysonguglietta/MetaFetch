@@ -267,6 +267,10 @@ func seriesOnlyEpisodeSelectionRequiresConfirmationBeforeSave() async throws {
     #expect(taggedData.range(of: Data("The Audacity".utf8)) != nil)
     #expect(taggedData.range(of: Data("tvsn".utf8)) != nil)
     #expect(taggedData.range(of: Data("tves".utf8)) != nil)
+    #expect(taggedData.range(of: Data("trkn".utf8)) != nil)
+    #expect(taggedData.range(of: Data("sosn".utf8)) != nil)
+    #expect(taggedData.range(of: Data("soal".utf8)) != nil)
+    #expect(taggedData.range(of: Data("sonm".utf8)) != nil)
     #expect(try MP4AtomMetadataWriter().metadataWasPersisted(at: fileURL, result: result))
 }
 
@@ -360,6 +364,48 @@ func saveAllTaggedFilesWritesEveryReadyEpisode() async throws {
     #expect(model.batchStatusMessage == "Verified metadata and available poster artwork on 2 episodes.")
 }
 
+@Test
+@MainActor
+func batchSeriesCoverChoiceIsWrittenToReadyEpisodes() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("MetaFetchBatchCoverTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    let episodeFile = directory.appendingPathComponent("The.Audacity.S01E03.mp4")
+    FileManager.default.createFile(atPath: episodeFile.path, contents: Data([0x00]))
+
+    let seriesArtworkURL = URL(string: "https://static.tvmaze.com/uploads/images/original_untouched/series.jpg")!
+    let metadataWriter = RecordingMetadataWriter()
+    let model = AppModel(
+        searchService: StubSearchService(results: [
+            makeEpisodeResult(id: 203, title: "Valley of Heart's Delight", episodeNumber: 3),
+        ]),
+        metadataWriter: metadataWriter
+    )
+    model.chooseMode(.tvShow)
+    model.importFiles(from: [episodeFile])
+    await model.search(file: model.files[0])
+    model.selectedBatchResult = makeResult(
+        id: 303,
+        title: "The Audacity",
+        year: "2026",
+        mediaKind: .tvSeries,
+        confidence: .exact,
+        summary: "Exact show match",
+        score: 200
+    ).replacingArtworkURL(seriesArtworkURL)
+
+    model.useSeriesArtworkForBatch()
+    await model.saveAllTaggedFiles()
+
+    #expect(model.files[0].artworkOverrideURL == seriesArtworkURL)
+    #expect(metadataWriter.savedArtworkURLs == [seriesArtworkURL])
+    #expect(metadataWriter.calls.map(\.includeArtwork) == [true])
+}
+
 private func makeResult(
     id: Int,
     title: String,
@@ -443,6 +489,10 @@ private final class RecordingMetadataWriter: MetadataWriting, @unchecked Sendabl
 
     var savedPaths: [String] {
         calls.map { $0.fileURL.standardizedFileURL.path }
+    }
+
+    var savedArtworkURLs: [URL?] {
+        calls.map(\.result.artworkURL)
     }
 
     func writeMetadata(

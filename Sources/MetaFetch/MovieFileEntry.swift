@@ -18,9 +18,11 @@ final class MovieFileEntry: ObservableObject, Identifiable {
         didSet {
             if selectedResult?.id != oldValue?.id {
                 allowsSeriesOnlySave = false
+                artworkOverrideURL = nil
             }
         }
     }
+    @Published var artworkOverrideURL: URL?
     @Published var isSearching = false
     @Published var isSaving = false
     @Published var saveProgress: Double?
@@ -48,11 +50,27 @@ final class MovieFileEntry: ObservableObject, Identifiable {
     }
 
     var hasSelectedArtwork: Bool {
-        selectedResult?.hasArtwork == true
+        selectedArtworkURL != nil
     }
 
     var willSaveArtwork: Bool {
         hasSelectedArtwork
+    }
+
+    var selectedArtworkURL: URL? {
+        artworkOverrideURL ?? selectedResult?.artworkURL
+    }
+
+    var artworkChoiceSummary: String {
+        if artworkOverrideURL != nil {
+            return "Using the selected batch cover."
+        }
+
+        if selectedResult?.artworkURL != nil {
+            return "Using this episode's artwork."
+        }
+
+        return "No artwork is available for this selection."
     }
 
     var saveActionLabel: String {
@@ -65,7 +83,7 @@ final class MovieFileEntry: ObservableObject, Identifiable {
 
     var saveModeSummary: String {
         if willSaveArtwork {
-            return "Includes poster artwork. Best presentation, slightly slower save."
+            return "\(artworkChoiceSummary) Best presentation, slightly slower save."
         }
 
         return "No poster art is available, so MetaFetch will try a metadata-only header update first and fall back to a full rewrite only if needed."

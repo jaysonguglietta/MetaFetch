@@ -107,6 +107,29 @@ struct MediaSearchResult: Hashable, Identifiable, Sendable {
             return "Network"
         }
     }
+
+    func replacingArtworkURL(_ artworkURL: URL?) -> MediaSearchResult {
+        MediaSearchResult(
+            trackId: trackId,
+            mediaKind: mediaKind,
+            trackName: trackName,
+            seriesName: seriesName,
+            artistName: artistName,
+            releaseDate: releaseDate,
+            primaryGenreName: primaryGenreName,
+            shortDescription: shortDescription,
+            longDescription: longDescription,
+            contentAdvisoryRating: contentAdvisoryRating,
+            artworkURL: artworkURL,
+            sourceURL: sourceURL,
+            sourceName: sourceName,
+            matchConfidence: matchConfidence,
+            matchSummary: matchSummary,
+            matchScore: matchScore,
+            seasonNumber: seasonNumber,
+            episodeNumber: episodeNumber
+        )
+    }
 }
 
 protocol MediaSearchServing: Sendable {
@@ -299,7 +322,7 @@ private struct WikimediaMovieSearchService {
             URLQueryItem(name: "prop", value: "extracts|pageprops"),
             URLQueryItem(name: "exintro", value: "1"),
             URLQueryItem(name: "explaintext", value: "1"),
-            URLQueryItem(name: "exchars", value: "600"),
+            URLQueryItem(name: "exchars", value: "1200"),
             URLQueryItem(name: "format", value: "json"),
             URLQueryItem(name: "origin", value: "*"),
         ]

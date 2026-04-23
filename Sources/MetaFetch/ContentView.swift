@@ -769,11 +769,9 @@ private struct TVBatchWorkspaceView: View {
                 }
 
                 HStack(spacing: 0) {
-                    batchTab("Favourites", isSelected: true)
-                    batchTab("Series", isSelected: false)
-                    batchTab("Seasons", isSelected: false)
-                    batchTab("Data", isSelected: false)
-                    batchTab("Cover", isSelected: false)
+                    ForEach(TVBatchTab.allCases) { tab in
+                        batchTab(tab)
+                    }
                 }
                 .padding(4)
                 .background(RetroTheme.paper.opacity(0.08))
@@ -781,49 +779,7 @@ private struct TVBatchWorkspaceView: View {
 
                 batchStatus
 
-                HStack(spacing: 0) {
-                    tableHeader("COVER", width: 136, alignment: .center)
-                    tableHeader("TITLE", alignment: .leading)
-                    tableHeader("YEAR", width: 90, alignment: .center)
-                    tableHeader("ACTION", width: 128, alignment: .center)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 10)
-                .background(RetroTheme.paper.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-                if model.batchSearchResults.isEmpty && !model.isBatchSearching {
-                    VStack(alignment: .leading, spacing: 12) {
-                        RetroPill(text: "Drop, Search, Apply", accent: RetroTheme.gold)
-
-                        Text("Search for the show title once. Click a result row to apply that show to all loaded episodes, then review the episode list on the left.")
-                            .font(RetroTheme.bodyFont(16))
-                            .foregroundStyle(RetroTheme.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .padding(24)
-                    .frame(maxWidth: .infinity, minHeight: 360, alignment: .topLeading)
-                    .retroPanel(accent: RetroTheme.paper.opacity(0.18))
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(Array(model.batchSearchResults.enumerated()), id: \.element.id) { index, result in
-                                BatchSearchResultRow(
-                                    result: result,
-                                    isSelected: model.selectedBatchResult?.id == result.id,
-                                    isStriped: index.isMultiple(of: 2),
-                                    apply: {
-                                        Task {
-                                            await model.applyBatchResultToAllFiles(result)
-                                        }
-                                    }
-                                )
-                            }
-                        }
-                    }
-                    .frame(minHeight: 420)
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                }
+                tabbedBatchContent
             }
             .padding(16)
             .retroPanel(accent: RetroTheme.gold)
@@ -843,7 +799,7 @@ private struct TVBatchWorkspaceView: View {
                     Text("all")
                 }
 
-                Text("Clicking a result applies it to all loaded episodes.")
+                Text("Series chooses the show, Seasons checks episode mapping, Data picks per-file metadata, Cover chooses artwork.")
                     .font(RetroTheme.bodyFont(13))
                     .foregroundStyle(RetroTheme.muted)
 
@@ -854,6 +810,68 @@ private struct TVBatchWorkspaceView: View {
         }
         .padding(16)
         .retroPanel(accent: RetroTheme.cyan)
+    }
+
+    @ViewBuilder
+    private var tabbedBatchContent: some View {
+        switch model.selectedBatchTab {
+        case .series:
+            seriesResultsContent
+        case .seasons:
+            BatchSeasonsPane(model: model)
+        case .data:
+            BatchDataPane(model: model, entry: model.selectedFile)
+        case .cover:
+            BatchCoverPane(model: model, entry: model.selectedFile)
+        }
+    }
+
+    private var seriesResultsContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if model.batchSearchResults.isEmpty && !model.isBatchSearching {
+                VStack(alignment: .leading, spacing: 12) {
+                    RetroPill(text: "Drop, Search, Apply", accent: RetroTheme.gold)
+
+                    Text("Search for the show title once. Click a result row to apply that show to all loaded episodes, then browse Seasons, Data, and Cover before saving.")
+                        .font(RetroTheme.bodyFont(16))
+                        .foregroundStyle(RetroTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, minHeight: 360, alignment: .topLeading)
+                .retroPanel(accent: RetroTheme.paper.opacity(0.18))
+            } else {
+                HStack(spacing: 0) {
+                    tableHeader("COVER", width: 136, alignment: .center)
+                    tableHeader("TITLE", alignment: .leading)
+                    tableHeader("YEAR", width: 90, alignment: .center)
+                    tableHeader("ACTION", width: 128, alignment: .center)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 10)
+                .background(RetroTheme.paper.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(model.batchSearchResults.enumerated()), id: \.element.id) { index, result in
+                            BatchSearchResultRow(
+                                result: result,
+                                isSelected: model.selectedBatchResult?.id == result.id,
+                                isStriped: index.isMultiple(of: 2),
+                                apply: {
+                                    Task {
+                                        await model.applyBatchResultToAllFiles(result)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+                .frame(minHeight: 420)
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            }
+        }
     }
 
     private var batchSearchField: some View {
@@ -939,16 +957,387 @@ private struct TVBatchWorkspaceView: View {
         }
     }
 
-    private func batchTab(_ title: String, isSelected: Bool) -> some View {
-        Text(title)
-            .font(RetroTheme.bodyFont(13))
-            .foregroundStyle(isSelected ? RetroTheme.ink : RetroTheme.paper.opacity(0.78))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isSelected ? RetroTheme.paper : Color.clear)
+    private func batchTab(_ tab: TVBatchTab) -> some View {
+        let isSelected = model.selectedBatchTab == tab
+
+        return Button {
+            model.selectBatchTab(tab)
+        } label: {
+            Text(tab.title)
+                .font(RetroTheme.bodyFont(13))
+                .foregroundStyle(isSelected ? RetroTheme.ink : RetroTheme.paper.opacity(0.78))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(isSelected ? RetroTheme.paper : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct BatchSeasonsPane: View {
+    @ObservedObject var model: AppModel
+
+    private var seasonGroups: [(season: Int, entries: [MovieFileEntry])] {
+        let grouped = Dictionary(grouping: model.files) { entry in
+            entry.selectedResult?.seasonNumber ?? entry.parsedCurrentQuery.seasonNumber ?? 0
+        }
+
+        return grouped
+            .map { (season: $0.key, entries: $0.value) }
+            .sorted { left, right in
+                if left.season == 0 {
+                    return false
+                }
+
+                if right.season == 0 {
+                    return true
+                }
+
+                return left.season < right.season
+            }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Browse the loaded episodes by detected season. Pick a row to focus it, or search an individual episode again if its data looks off.")
+                .font(RetroTheme.bodyFont(15))
+                .foregroundStyle(RetroTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    ForEach(seasonGroups, id: \.season) { group in
+                        VStack(alignment: .leading, spacing: 10) {
+                            RetroPill(
+                                text: group.season == 0 ? "Unknown Season" : "Season \(group.season)",
+                                accent: RetroTheme.cyan
+                            )
+
+                            ForEach(group.entries) { entry in
+                                BatchSeasonEpisodeRow(
+                                    model: model,
+                                    entry: entry,
+                                    isSelected: model.selectedFileID == entry.id
+                                )
+                            }
+                        }
+                        .padding(14)
+                        .retroPanel(accent: RetroTheme.paper.opacity(0.16))
+                    }
+                }
+            }
+            .frame(minHeight: 420)
+        }
+    }
+}
+
+private struct BatchSeasonEpisodeRow: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var entry: MovieFileEntry
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Button {
+                model.selectedFileID = entry.id
+                model.selectBatchTab(.data)
+            } label: {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(entry.selectedResult?.seasonEpisodeLabel ?? entry.parsedCurrentQuery.episodeCode ?? "No episode code")
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .foregroundStyle(isSelected ? RetroTheme.ink : RetroTheme.cyan)
+
+                    Text(entry.selectedResult?.trackName ?? entry.filename)
+                        .font(RetroTheme.labelFont(15))
+                        .foregroundStyle(isSelected ? RetroTheme.ink : RetroTheme.paper)
+                        .lineLimit(2)
+
+                    Text(entry.sidebarStatus)
+                        .font(RetroTheme.bodyFont(12))
+                        .foregroundStyle(isSelected ? RetroTheme.ink.opacity(0.72) : RetroTheme.muted)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+
+            Button("Search") {
+                Task {
+                    await model.search(file: entry)
+                }
+            }
+            .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+            .disabled(entry.isSearching || entry.isSaving)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(isSelected ? RetroTheme.cyan : RetroTheme.panelRaised.opacity(0.88))
+        )
+    }
+}
+
+private struct BatchDataPane: View {
+    @ObservedObject var model: AppModel
+    let entry: MovieFileEntry?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if let entry {
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        RetroPill(text: entry.parsedCurrentQuery.episodeCode ?? "Episode", accent: RetroTheme.gold)
+
+                        Text(entry.filename)
+                            .font(RetroTheme.heroFont(24))
+                            .foregroundStyle(RetroTheme.paper)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Text(entry.statusMessage)
+                            .font(RetroTheme.bodyFont(14))
+                            .foregroundStyle(RetroTheme.muted)
+                    }
+
+                    Spacer()
+
+                    Button("Search Episode") {
+                        Task {
+                            await model.search(file: entry)
+                        }
+                    }
+                    .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+                    .disabled(entry.isSearching || entry.isSaving)
+                }
+
+                if let selectedResult = entry.selectedResult {
+                    VStack(alignment: .leading, spacing: 9) {
+                        MetadataLine(label: "Selected", value: selectedResult.trackName)
+                        MetadataLine(label: "Series", value: selectedResult.seriesName ?? selectedResult.trackName)
+                        MetadataLine(label: "Episode Code", value: selectedResult.seasonEpisodeLabel ?? entry.parsedCurrentQuery.episodeCode ?? "Not provided")
+                        MetadataLine(label: "Genre", value: selectedResult.primaryGenreName ?? "Not provided")
+                        MetadataLine(label: "Year", value: selectedResult.releaseYear ?? "Not provided")
+                        MetadataLine(label: selectedResult.creatorLabel, value: selectedResult.creatorValue ?? "Not provided")
+                        MetadataLine(label: "Artwork", value: entry.artworkChoiceSummary)
+                    }
+                    .padding(16)
+                    .retroPanel(accent: RetroTheme.paper.opacity(0.16))
+
+                    DownloadedDetailsPanel(result: selectedResult)
+                }
+
+                Text("Choose a different returned match for this episode if needed.")
+                    .font(RetroTheme.bodyFont(14))
+                    .foregroundStyle(RetroTheme.muted)
+
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        ForEach(Array(entry.searchResults.enumerated()), id: \.element.id) { index, result in
+                            BatchEpisodeMatchChoiceRow(
+                                result: result,
+                                isSelected: entry.selectedResult?.id == result.id,
+                                isStriped: index.isMultiple(of: 2),
+                                select: {
+                                    entry.selectedResult = result
+                                    model.batchStatusMessage = "Selected \(result.trackName) for \(entry.filename)."
+                                }
+                            )
+                        }
+                    }
+                }
+                .frame(minHeight: 260)
+            } else {
+                Text("Select an episode from the list to inspect its metadata.")
+                    .font(RetroTheme.bodyFont(16))
+                    .foregroundStyle(RetroTheme.muted)
+                    .padding(24)
+                    .frame(maxWidth: .infinity, minHeight: 420, alignment: .topLeading)
+                    .retroPanel(accent: RetroTheme.paper.opacity(0.18))
+            }
+        }
+    }
+}
+
+private struct BatchEpisodeMatchChoiceRow: View {
+    let result: MediaSearchResult
+    let isSelected: Bool
+    let isStriped: Bool
+    let select: () -> Void
+
+    var body: some View {
+        Button(action: select) {
+            HStack(spacing: 14) {
+                ArtworkView(
+                    url: result.artworkURL,
+                    width: 64,
+                    height: 92,
+                    accent: isSelected ? RetroTheme.lime : RetroTheme.paper.opacity(0.22)
+                )
+
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(result.trackName)
+                        .font(RetroTheme.heroFont(20))
+                        .foregroundStyle(isSelected ? RetroTheme.ink : RetroTheme.paper)
+                        .lineLimit(2)
+
+                    Text(result.subtitleLine.isEmpty ? result.matchSummary : result.subtitleLine.uppercased())
+                        .font(RetroTheme.labelFont(11))
+                        .tracking(1.6)
+                        .foregroundStyle(isSelected ? RetroTheme.ink.opacity(0.72) : RetroTheme.gold)
+                        .lineLimit(1)
+
+                    HStack(spacing: 8) {
+                        MatchConfidenceBadge(confidence: result.matchConfidence)
+                        InfoBadge(text: result.sourceName, accent: RetroTheme.paper.opacity(0.18), foreground: isSelected ? RetroTheme.ink : RetroTheme.paper)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(isSelected ? "Selected" : "Use")
+                    .font(RetroTheme.labelFont(11))
+                    .tracking(1.7)
+                    .foregroundStyle(RetroTheme.ink)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(isSelected ? RetroTheme.lime : RetroTheme.gold)
+                    )
+            }
+            .padding(12)
+            .background(rowBackground)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var rowBackground: some ShapeStyle {
+        if isSelected {
+            return AnyShapeStyle(RetroTheme.cyan)
+        }
+
+        return AnyShapeStyle((isStriped ? RetroTheme.panelRaised : RetroTheme.panel).opacity(0.9))
+    }
+}
+
+private struct BatchCoverPane: View {
+    @ObservedObject var model: AppModel
+    let entry: MovieFileEntry?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Choose whether the batch writes each episode's own artwork or uses the selected series cover across all tagged episodes.")
+                .font(RetroTheme.bodyFont(15))
+                .foregroundStyle(RetroTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 16) {
+                    coverChoiceCards
+                }
+
+                VStack(alignment: .leading, spacing: 16) {
+                    coverChoiceCards
+                }
+            }
+
+            if let entry {
+                VStack(alignment: .leading, spacing: 12) {
+                    RetroPill(text: "Selected Episode Cover", accent: RetroTheme.cyan)
+
+                    HStack(alignment: .top, spacing: 16) {
+                        ArtworkView(url: entry.selectedArtworkURL, width: 150, height: 220, accent: RetroTheme.lime)
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(entry.selectedResult?.trackName ?? entry.filename)
+                                .font(RetroTheme.heroFont(24))
+                                .foregroundStyle(RetroTheme.paper)
+
+                            Text(entry.artworkChoiceSummary)
+                                .font(RetroTheme.bodyFont(14))
+                                .foregroundStyle(RetroTheme.muted)
+
+                            HStack(spacing: 10) {
+                                Button("Use Episode Art") {
+                                    model.useEpisodeArtwork(for: entry)
+                                }
+                                .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+
+                                Button("Use Series Cover") {
+                                    model.useSeriesArtwork(for: entry)
+                                }
+                                .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.lime))
+                                .disabled(model.selectedBatchResult?.artworkURL == nil)
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+                .retroPanel(accent: RetroTheme.paper.opacity(0.16))
+            }
+        }
+        .frame(minHeight: 420, alignment: .topLeading)
+    }
+
+    private var coverChoiceCards: some View {
+        Group {
+            CoverChoiceCard(
+                title: "Episode Covers",
+                subtitle: "Use the poster TVMaze returned for each episode.",
+                artworkURL: entry?.selectedResult?.artworkURL,
+                actionTitle: "Use Episode Covers",
+                accent: RetroTheme.gold,
+                isDisabled: false,
+                action: {
+                    model.useEpisodeArtworkForBatch()
+                }
             )
+
+            CoverChoiceCard(
+                title: "Series Cover",
+                subtitle: "Use the selected series poster for every tagged episode.",
+                artworkURL: model.selectedBatchResult?.artworkURL,
+                actionTitle: "Use Series Cover",
+                accent: RetroTheme.lime,
+                isDisabled: model.selectedBatchResult?.artworkURL == nil,
+                action: {
+                    model.useSeriesArtworkForBatch()
+                }
+            )
+        }
+    }
+}
+
+private struct CoverChoiceCard: View {
+    let title: String
+    let subtitle: String
+    let artworkURL: URL?
+    let actionTitle: String
+    let accent: Color
+    var isDisabled = false
+    let action: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ArtworkView(url: artworkURL, width: 150, height: 220, accent: accent)
+
+            Text(title)
+                .font(RetroTheme.heroFont(22))
+                .foregroundStyle(RetroTheme.paper)
+
+            Text(subtitle)
+                .font(RetroTheme.bodyFont(14))
+                .foregroundStyle(RetroTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button(actionTitle, action: action)
+                .buttonStyle(RetroPrimaryButtonStyle(accent: accent))
+                .disabled(isDisabled)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .retroPanel(accent: accent)
     }
 }
 
@@ -1568,7 +1957,7 @@ private struct SelectionPreviewCard: View {
             )
 
             if let match = entry.selectedResult {
-                ArtworkView(url: match.artworkURL, width: 300, height: 440, accent: RetroTheme.lime)
+                ArtworkView(url: entry.selectedArtworkURL, width: 300, height: 440, accent: RetroTheme.lime)
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text(match.trackName)
@@ -1582,10 +1971,7 @@ private struct SelectionPreviewCard: View {
                             .foregroundStyle(RetroTheme.gold)
                     }
 
-                    Text(match.synopsis)
-                        .font(RetroTheme.bodyFont(15))
-                        .foregroundStyle(RetroTheme.muted)
-                        .lineLimit(10)
+                    DownloadedDetailsPanel(result: match, lineLimit: 14)
                 }
 
                 HStack(spacing: 8) {
@@ -1628,11 +2014,11 @@ private struct SelectionPreviewCard: View {
                     MetadataLine(label: "Genre", value: match.primaryGenreName ?? "Not provided")
                     MetadataLine(label: "Year", value: match.releaseYear ?? "Not provided")
                     MetadataLine(label: match.creatorLabel, value: match.creatorValue ?? "Not provided")
-                    MetadataLine(label: "Artwork", value: match.artworkURL == nil ? "None" : "Included")
+                    MetadataLine(label: "Artwork", value: entry.artworkChoiceSummary)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(match.hasArtwork ? "Poster Artwork Included" : "No Poster Artwork Available")
+                    Text(entry.hasSelectedArtwork ? "Poster Artwork Included" : "No Poster Artwork Available")
                         .font(RetroTheme.labelFont(13))
                         .foregroundStyle(RetroTheme.paper)
 
@@ -2127,6 +2513,40 @@ private struct InfoBadge: View {
                 Capsule(style: .continuous)
                     .fill(accent)
             )
+    }
+}
+
+private struct DownloadedDetailsPanel: View {
+    let result: MediaSearchResult
+    var lineLimit: Int? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            RetroPill(text: "Downloaded Details", accent: RetroTheme.cyan)
+
+            Text(result.synopsis)
+                .font(RetroTheme.bodyFont(15))
+                .foregroundStyle(RetroTheme.muted)
+                .lineLimit(lineLimit)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                InfoBadge(text: result.sourceName, accent: RetroTheme.paper.opacity(0.18), foreground: RetroTheme.paper)
+
+                if let sourceURL = result.sourceURL {
+                    Link(destination: sourceURL) {
+                        Label("Open Source", systemImage: "safari")
+                            .font(RetroTheme.labelFont(11))
+                            .tracking(1.7)
+                            .foregroundStyle(RetroTheme.cyan)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .retroPanel(accent: RetroTheme.cyan)
     }
 }
 

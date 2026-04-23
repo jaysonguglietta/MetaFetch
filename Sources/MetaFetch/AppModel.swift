@@ -24,6 +24,30 @@ enum SearchSelectionPolicy {
     }
 }
 
+enum TVBatchTab: String, CaseIterable, Identifiable {
+    case series
+    case seasons
+    case data
+    case cover
+
+    var id: Self {
+        self
+    }
+
+    var title: String {
+        switch self {
+        case .series:
+            return "Series"
+        case .seasons:
+            return "Seasons"
+        case .data:
+            return "Data"
+        case .cover:
+            return "Cover"
+        }
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var files: [MovieFileEntry] = []
@@ -35,6 +59,7 @@ final class AppModel: ObservableObject {
     @Published var batchQueryText = ""
     @Published var batchSearchResults: [MediaSearchResult] = []
     @Published var selectedBatchResult: MediaSearchResult?
+    @Published var selectedBatchTab: TVBatchTab = .series
     @Published var isBatchSearching = false
     @Published var isBatchSaving = false
     @Published var batchStatusMessage = "Search for the show once, then apply it to every loaded episode."
@@ -274,6 +299,7 @@ final class AppModel: ObservableObject {
         }
 
         let includeArtwork = file.willSaveArtwork
+        let resultForWriting = selectedResult.replacingArtworkURL(file.selectedArtworkURL)
         let fileID = file.id
         file.isSaving = true
         file.saveProgress = nil
@@ -283,8 +309,8 @@ final class AppModel: ObservableObject {
             : "Preparing metadata-only fast path"
 
         do {
-            if includeArtwork && selectedResult.artworkURL != nil {
-                _ = try await ArtworkPipeline.shared.preparedArtwork(for: selectedResult.artworkURL)
+            if includeArtwork && resultForWriting.artworkURL != nil {
+                _ = try await ArtworkPipeline.shared.preparedArtwork(for: resultForWriting.artworkURL)
             }
 
             file.statusMessage = includeArtwork
@@ -294,7 +320,7 @@ final class AppModel: ObservableObject {
 
             try await metadataWriter.writeMetadata(
                 to: file.fileURL,
-                using: selectedResult,
+                using: resultForWriting,
                 includeArtwork: includeArtwork,
                 progressHandler: { [weak self] progress in
                     await self?.applySaveProgress(progress, toFileWithID: fileID)
@@ -420,6 +446,7 @@ final class AppModel: ObservableObject {
         }
 
         selectedBatchResult = result
+        selectedBatchTab = .seasons
         batchErrorMessage = nil
         batchStatusMessage = "Applying \(showTitle) to \(files.count) episode\(files.count == 1 ? "" : "s")"
 
@@ -433,6 +460,59 @@ final class AppModel: ObservableObject {
         }
 
         batchStatusMessage = "Applied \(showTitle). Review any yellow badges, then fast-save the tagged files."
+    }
+
+    func selectBatchTab(_ tab: TVBatchTab) {
+        selectedBatchTab = tab
+        batchErrorMessage = nil
+    }
+
+    func useEpisodeArtworkForBatch() {
+        for entry in files {
+            entry.artworkOverrideURL = nil
+        }
+
+        selectedBatchTab = .cover
+        batchErrorMessage = nil
+        batchStatusMessage = "Using episode-specific artwork wherever TVMaze provides it."
+    }
+
+    func useSeriesArtworkForBatch() {
+        guard let artworkURL = selectedBatchResult?.artworkURL else {
+            batchErrorMessage = "Pick a series with cover art before applying one cover to the batch."
+            batchStatusMessage = "No series cover is selected yet."
+            selectedBatchTab = .cover
+            return
+        }
+
+        for entry in files where entry.selectedResult != nil {
+            entry.artworkOverrideURL = artworkURL
+        }
+
+        selectedBatchTab = .cover
+        batchErrorMessage = nil
+        batchStatusMessage = "Using the selected series cover for every tagged episode."
+    }
+
+    func useSeriesArtwork(for entry: MovieFileEntry) {
+        guard let artworkURL = selectedBatchResult?.artworkURL else {
+            batchErrorMessage = "Pick a series with cover art before applying a series cover."
+            batchStatusMessage = "No series cover is selected yet."
+            selectedBatchTab = .cover
+            return
+        }
+
+        entry.artworkOverrideURL = artworkURL
+        selectedBatchTab = .cover
+        batchErrorMessage = nil
+        batchStatusMessage = "Using the selected series cover for \(entry.filename)."
+    }
+
+    func useEpisodeArtwork(for entry: MovieFileEntry) {
+        entry.artworkOverrideURL = nil
+        selectedBatchTab = .cover
+        batchErrorMessage = nil
+        batchStatusMessage = "Using episode artwork for \(entry.filename)."
     }
 
     func searchAllFiles() async {
@@ -557,6 +637,7 @@ final class AppModel: ObservableObject {
         batchQueryText = ""
         batchSearchResults = []
         selectedBatchResult = nil
+        selectedBatchTab = .series
         isBatchSearching = false
         isBatchSaving = false
         batchStatusMessage = "Search for the show once, then apply it to every loaded episode."

@@ -399,11 +399,15 @@ struct MP4AtomMetadataWriter: Sendable {
 
         switch result.mediaKind {
         case .movie:
+            appendTextAtom(.sortName, value: result.trackName, to: &atoms)
             appendIntegerAtom(.mediaKind, value: 9, byteCount: 1, to: &atoms)
         case .tvEpisode:
             let showName = result.seriesName?.trimmedNilIfBlank
             appendTextAtom(.tvShow, value: showName, to: &atoms)
             appendTextAtom(.album, value: showName, to: &atoms)
+            appendTextAtom(.sortShow, value: showName, to: &atoms)
+            appendTextAtom(.sortAlbum, value: showName, to: &atoms)
+            appendTextAtom(.sortName, value: result.trackName, to: &atoms)
             appendTextAtom(.episodeId, value: result.seasonEpisodeLabel, to: &atoms)
             appendIntegerAtom(.mediaKind, value: 10, byteCount: 1, to: &atoms)
 
@@ -413,10 +417,14 @@ struct MP4AtomMetadataWriter: Sendable {
 
             if let episodeNumber = result.episodeNumber {
                 appendIntegerAtom(.tvEpisode, value: episodeNumber, byteCount: 4, to: &atoms)
+                appendTrackNumberAtom(value: episodeNumber, to: &atoms)
             }
         case .tvSeries:
             appendTextAtom(.tvShow, value: result.trackName, to: &atoms)
             appendTextAtom(.album, value: result.trackName, to: &atoms)
+            appendTextAtom(.sortShow, value: result.trackName, to: &atoms)
+            appendTextAtom(.sortAlbum, value: result.trackName, to: &atoms)
+            appendTextAtom(.sortName, value: result.trackName, to: &atoms)
             appendIntegerAtom(.mediaKind, value: 10, byteCount: 1, to: &atoms)
         }
 
@@ -439,6 +447,25 @@ struct MP4AtomMetadataWriter: Sendable {
         guard let value = value?.trimmedNilIfBlank,
               let payload = value.data(using: .utf8),
               let atom = try? makeMetadataDataAtom(type: type, dataType: 1, payload: payload) else {
+            return
+        }
+
+        atoms.append(atom)
+    }
+
+    private func appendTrackNumberAtom(value: Int, to atoms: inout [Data]) {
+        guard value > 0,
+              value <= Int(UInt16.max) else {
+            return
+        }
+
+        var payload = Data()
+        payload.append(makeUInt16Data(0))
+        payload.append(makeUInt16Data(UInt16(value)))
+        payload.append(makeUInt16Data(0))
+        payload.append(makeUInt16Data(0))
+
+        guard let atom = try? makeMetadataDataAtom(type: .trackNumber, dataType: 0, payload: payload) else {
             return
         }
 
@@ -845,6 +872,10 @@ struct MP4AtomMetadataWriter: Sendable {
         withUnsafeBytes(of: value.bigEndian) { Data($0) }
     }
 
+    private func makeUInt16Data(_ value: UInt16) -> Data {
+        withUnsafeBytes(of: value.bigEndian) { Data($0) }
+    }
+
     private func makeUInt64Data(_ value: UInt64) -> Data {
         withUnsafeBytes(of: value.bigEndian) { Data($0) }
     }
@@ -914,9 +945,13 @@ private struct MP4AtomType: Hashable, Sendable {
     static let moov = MP4AtomType(ascii: "moov")
     static let name = MP4AtomType(bytes: [0xA9, 0x6E, 0x61, 0x6D])
     static let releaseDate = MP4AtomType(bytes: [0xA9, 0x64, 0x61, 0x79])
+    static let sortAlbum = MP4AtomType(ascii: "soal")
+    static let sortName = MP4AtomType(ascii: "sonm")
+    static let sortShow = MP4AtomType(ascii: "sosn")
     static let stbl = MP4AtomType(ascii: "stbl")
     static let stco = MP4AtomType(ascii: "stco")
     static let trak = MP4AtomType(ascii: "trak")
+    static let trackNumber = MP4AtomType(ascii: "trkn")
     static let tvEpisode = MP4AtomType(ascii: "tves")
     static let tvSeason = MP4AtomType(ascii: "tvsn")
     static let tvShow = MP4AtomType(ascii: "tvsh")

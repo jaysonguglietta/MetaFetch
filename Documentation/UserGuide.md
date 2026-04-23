@@ -65,14 +65,20 @@ Search the show title once, then click the correct show card. MetaFetch applies 
 Batch controls:
 
 - `Search Show`: Finds shared show cards in the right-side search table.
+- `Series`: Pick the show match that should drive the whole batch.
+- `Seasons`: Review the loaded files by detected season and episode code, then jump into any row that needs attention.
+- `Data`: Inspect the selected episode metadata and choose a different returned match for that file when needed.
+- `Cover`: Choose episode-specific artwork or apply the selected series cover to every tagged episode.
 - Clicking a show card applies that show to every loaded episode file.
-- `Save All Tagged + Posters`: Saves every file that already has a selected episode match, including poster artwork when the source provides it.
+- `Save # + Posters`: Saves every ready file that already has a selected episode match, including poster artwork when the source provides it.
 
 ## What Gets Written
 
 MetaFetch writes the selected title, description, genre when available, media kind, and artwork when poster saving is enabled. These are written as MP4 `moov/udta/meta/ilst` atoms so Apple-style media apps can read them.
 
-Movie files receive movie-style metadata. TV episode files receive episode-focused metadata such as show title, season number, episode number, and episode title when the source returns those fields.
+Movie files receive movie-style metadata from Wikipedia, including a downloaded synopsis/description, year, genre, director when it can be parsed, source link, and artwork when available. TV episode files receive episode-focused metadata from TVMaze, including episode title, show title, season number, episode number, downloaded episode description, network, source link, and episode or series artwork.
+
+The `Downloaded Details` panel shows the description that MetaFetch will write before you save. In TV batch mode, use the `Data` tab to review the selected episode's downloaded details.
 
 ## Search And Review Tips
 
