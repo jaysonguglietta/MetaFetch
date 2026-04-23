@@ -59,6 +59,26 @@ final class AppModel: ObservableObject {
         files.contains(where: \.canSave)
     }
 
+    var canUseTVBatchTools: Bool {
+        selectedMode == .tvShow && files.count > 1
+    }
+
+    var isBatchBusy: Bool {
+        files.contains { $0.isSearching || $0.isSaving }
+    }
+
+    var batchMatchedCount: Int {
+        files.filter { $0.selectedResult != nil }.count
+    }
+
+    var batchSavedCount: Int {
+        files.filter { $0.lastSavedAt != nil }.count
+    }
+
+    var batchNeedsReviewCount: Int {
+        files.filter { !$0.canSave && $0.lastSavedAt == nil }.count
+    }
+
     var canChooseMode: Bool {
         files.isEmpty
     }
@@ -263,9 +283,33 @@ final class AppModel: ObservableObject {
     }
 
     func saveAllTaggedFiles() async {
+        await saveAllTaggedFiles(metadataOnly: false)
+    }
+
+    func saveAllTaggedFiles(metadataOnly: Bool) async {
+        if metadataOnly {
+            setArtworkSavingForAll(false)
+        }
+
         for entry in files where entry.canSave {
             await save(file: entry)
         }
+    }
+
+    func searchAllFiles() async {
+        for entry in files {
+            await search(file: entry)
+        }
+    }
+
+    func setArtworkSavingForAll(_ includeArtwork: Bool) {
+        for entry in files {
+            entry.includeArtworkWhenSaving = includeArtwork
+        }
+
+        noticeMessage = includeArtwork
+            ? "Poster artwork will be included for all loaded files when available."
+            : "Poster artwork is off for all loaded files, so batch saves will use the fastest metadata path."
     }
 
     func checkForUpdates() async {

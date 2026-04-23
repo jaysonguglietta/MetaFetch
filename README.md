@@ -6,13 +6,14 @@ MetaFetch is a native macOS SwiftUI app for tagging `.mp4` files with movie or T
 
 - Choose `Movie` or `TV Show` when the app starts.
 - Drag and drop one or more `.mp4` files, or use the file picker.
+- Use TV batch controls to search and fast-save several episodes from the same show.
 - Clean filenames into searchable titles automatically.
 - Detect TV episode codes like `S01E03` and `2x07`.
 - Use folder context for TV files like `Severance/Season 2/Episode 04.mp4`.
 - Review match confidence, result source, and source page links before saving.
-- Write title, synopsis, genre, artwork, and movie or episode-specific metadata back to the MP4.
-- Use a fast metadata-only save path when artwork is off and the file supports it.
-- Verify saved metadata by reading the MP4 back after writing, then fall back safely if a fast save does not stick.
+- Write title, synopsis, genre, artwork, and movie or episode-specific metadata back to Apple/iTunes-style MP4 atoms.
+- Use a native MP4 atom writer first, then fall back to AVFoundation only when the file layout requires it.
+- Verify saved metadata by reading the MP4 back after writing, then fall back if a fast save does not stick.
 - Prioritize speed by writing without creating sidecar safety backups.
 - Check GitHub Releases for newer versions, download an installer asset, and open it for user-confirmed installation.
 

@@ -6,9 +6,9 @@ This is a practical roadmap for turning MetaFetch from a fast tagging utility in
 
 - Optional safety mode: Add a preference to create recovery backups for users who prefer maximum protection over fastest saves.
 - Manual metadata editor: Let users tweak title, sort title, synopsis, genre, release date, artwork, season, and episode before saving.
-- Save report: After `Save All Tagged`, show which files saved, failed, used fast metadata-only writes, or needed full MP4 rewrites.
 - MP4 headroom check: Detect files with little or no metadata padding and explain when a full rewrite will be required.
-- Batch folder import: Let users drop a season folder and automatically detect show, season, and episode from folder context.
+- Save report: After `Save All Tagged`, show which files saved, failed, used fast metadata-only writes, or needed full MP4 rewrites.
+- Batch folder import: Extend the new TV Batch Deck so users can drop a season folder and auto-group by show, season, and episode.
 
 ## Usability Polish
 

@@ -1,8 +1,8 @@
 # MetaFetch User Guide
 
-MetaFetch tags MP4 files with movie or TV episode metadata. It does not delete your files. When saving, it updates the original file in place when possible or writes a tagged temporary copy through AVFoundation and replaces the original when needed.
+MetaFetch tags MP4 files with movie or TV episode metadata. It does not delete your files. When saving, it updates the original file with Apple/iTunes-style MP4 metadata atoms when possible, or writes a tagged temporary copy and replaces the original when the container needs to be rebuilt.
 
-For speed, MetaFetch does not create a sidecar safety backup before saving. Metadata-only saves write directly to the original MP4 header. Full container rewrites still write a temporary tagged copy first, then replace the original when export finishes.
+For speed, MetaFetch does not create a sidecar safety backup before saving. Metadata-only saves write directly to the original MP4 header. Container rebuilds still write a temporary tagged copy first, then replace the original when the rebuild finishes.
 
 After every save, MetaFetch reads the MP4 back and verifies that core tags such as title and show name actually persisted. If a metadata-only fast save reports success but the tags are not readable afterward, MetaFetch falls back to a full container rewrite instead of silently leaving the file untagged.
 
@@ -58,9 +58,15 @@ If MetaFetch shows `Series Only`, it found the show but not a specific episode. 
 
 If you intentionally want to save a series-level result to an episode file, MetaFetch asks you to confirm that choice before the save button is enabled.
 
+For 3 or 4 episodes from the same show, drop them together. The sidebar shows a `TV Batch Deck` with:
+
+- `Search All Episodes`: Re-runs matching across the whole loaded episode stack.
+- `Fast Save All Tagged`: Turns poster artwork off and saves every file that already has a selected episode match.
+- `Turn Posters Off For Batch`: Keeps the batch on the quickest metadata-only path before you save.
+
 ## What Gets Written
 
-MetaFetch writes the selected title, description, genre when available, media kind, and artwork when poster saving is enabled.
+MetaFetch writes the selected title, description, genre when available, media kind, and artwork when poster saving is enabled. These are written as MP4 `moov/udta/meta/ilst` atoms so Apple-style media apps can read them.
 
 Movie files receive movie-style metadata. TV episode files receive episode-focused metadata such as show title, season number, episode number, and episode title when the source returns those fields.
 
@@ -83,9 +89,9 @@ Use `Open Source` on result cards to inspect the source page before choosing a m
 
 ## Save Speed
 
-`Fast Save Metadata` appears when poster artwork is off or unavailable. MetaFetch first tries a metadata-only header update. If the file does not support that path, it falls back to a full MP4 container rewrite.
+`Fast Save Metadata` appears when poster artwork is off or unavailable. MetaFetch first tries its native MP4 atom writer, which can update metadata in the existing movie header when the file has enough headroom.
 
-`Save Metadata + Poster` includes artwork. This usually takes longer because AVFoundation may need to write a new MP4 container. The video and audio are passed through rather than re-encoded.
+`Save Metadata + Poster` includes artwork. This may take longer because artwork needs more metadata space. If there is not enough header room, MetaFetch rebuilds the MP4 container and adjusts chunk offsets without re-encoding video or audio. AVFoundation remains a final fallback for unusual files.
 
 Fast saves work best when the MP4 has free space near the front of the container for metadata growth. Files converted with only `-movflags +faststart` often have a front `moov` atom but almost no padding, so larger tags or artwork may require a full rewrite.
 
@@ -120,6 +126,7 @@ If the update checker says a release has no installable asset, open the release 
 
 - If search returns the wrong title, edit the search field and search again.
 - If TV mode only finds the series, add an episode code like `S01E03`.
+- If you are tagging several TV episodes, use the `TV Batch Deck` in the sidebar to search all, review badges, and fast-save selected matches.
 - If the sidebar is hidden, use `Hide Sidebar` / `Show Sidebar` in the toolbar.
 - If saving is slow, turn off poster artwork and use `Fast Save Metadata`.
 - If a newly converted MP4 never accepts tags quickly, rebuild it with MP4 metadata headroom such as `-moov_size 16777216`.

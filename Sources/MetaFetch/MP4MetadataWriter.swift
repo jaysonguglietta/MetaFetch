@@ -41,6 +41,7 @@ struct MP4MetadataWriter: MetadataWriting {
     }
 
     private let outputFileType: AVFileType = .mp4
+    private let atomWriter = MP4AtomMetadataWriter()
 
     func writeMetadata(
         to fileURL: URL,
@@ -48,13 +49,28 @@ struct MP4MetadataWriter: MetadataWriting {
         includeArtwork: Bool,
         progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)? = nil
     ) async throws {
+        let artworkData = includeArtwork
+            ? try await ArtworkPipeline.shared.preparedArtwork(for: result.artworkURL)
+            : nil
+        let verificationExpectation = MetadataVerificationExpectation(result: result)
+
+        if await attemptNativeAtomWrite(
+            to: fileURL,
+            using: result,
+            artworkData: artworkData,
+            verificationExpectation: verificationExpectation,
+            progressHandler: progressHandler
+        ) {
+            return
+        }
+
         let metadataItems = try await buildMetadataItems(for: result, includeArtwork: includeArtwork)
 
         if !includeArtwork {
             let usedFastPath = await attemptMetadataOnlyFastPath(
                 to: fileURL,
                 metadataItems: metadataItems,
-                verificationExpectation: MetadataVerificationExpectation(result: result),
+                verificationExpectation: verificationExpectation,
                 progressHandler: progressHandler
             )
 
@@ -114,9 +130,59 @@ struct MP4MetadataWriter: MetadataWriting {
 
         guard await metadataWasPersisted(
             at: fileURL,
-            expectation: MetadataVerificationExpectation(result: result)
+            expectation: verificationExpectation
         ) else {
             throw WriterError.metadataVerificationFailed
+        }
+    }
+
+    private func attemptNativeAtomWrite(
+        to fileURL: URL,
+        using result: MediaSearchResult,
+        artworkData: Data?,
+        verificationExpectation: MetadataVerificationExpectation,
+        progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)?
+    ) async -> Bool {
+        await progressHandler?(makeProgressUpdate(
+            fractionCompleted: 0.04,
+            message: "Preparing native MP4 metadata writer"
+        ))
+
+        do {
+            try await atomWriter.writeMetadata(
+                to: fileURL,
+                using: result,
+                artworkData: artworkData,
+                progressHandler: progressHandler
+            )
+
+            await progressHandler?(makeProgressUpdate(
+                fractionCompleted: 0.9,
+                message: "Verifying native MP4 metadata"
+            ))
+
+            guard await metadataWasPersisted(
+                at: fileURL,
+                expectation: verificationExpectation
+            ) else {
+                await progressHandler?(makeProgressUpdate(
+                    fractionCompleted: 0.08,
+                    message: "Native MP4 metadata did not verify, falling back to AVFoundation"
+                ))
+                return false
+            }
+
+            await progressHandler?(makeProgressUpdate(
+                fractionCompleted: 1,
+                message: "Finished MP4 metadata atom save"
+            ))
+            return true
+        } catch {
+            await progressHandler?(makeProgressUpdate(
+                fractionCompleted: 0.08,
+                message: "Native MP4 writer could not update this file, falling back to AVFoundation"
+            ))
+            return false
         }
     }
 

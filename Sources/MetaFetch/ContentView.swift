@@ -170,6 +170,10 @@ private struct SidebarView: View {
                     .padding(.horizontal, 4)
             }
 
+            if model.canUseTVBatchTools {
+                TVBatchPanel(model: model)
+            }
+
             List(selection: $model.selectedFileID) {
                 ForEach(model.files) { entry in
                     SidebarRow(entry: entry)
@@ -205,6 +209,62 @@ private struct SidebarView: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct TVBatchPanel: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("TV Batch Deck".uppercased())
+                        .font(RetroTheme.labelFont(11))
+                        .tracking(2.2)
+                        .foregroundStyle(RetroTheme.cyan)
+
+                    Text("Same-show episodes are easiest when you scan the whole mini stack, review the badges, then fast-save the tagged ones.")
+                        .font(RetroTheme.bodyFont(13))
+                        .foregroundStyle(RetroTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer()
+            }
+
+            HStack(spacing: 8) {
+                SidebarStat(label: "Matched", value: "\(model.batchMatchedCount)", accent: RetroTheme.lime)
+                SidebarStat(label: "Review", value: "\(model.batchNeedsReviewCount)", accent: RetroTheme.gold)
+                SidebarStat(label: "Saved", value: "\(model.batchSavedCount)", accent: RetroTheme.cyan)
+            }
+
+            VStack(spacing: 8) {
+                Button("Search All Episodes") {
+                    Task {
+                        await model.searchAllFiles()
+                    }
+                }
+                .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.cyan))
+                .disabled(model.files.isEmpty || model.isBatchBusy)
+
+                Button("Fast Save All Tagged") {
+                    Task {
+                        await model.saveAllTaggedFiles(metadataOnly: true)
+                    }
+                }
+                .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.lime))
+                .disabled(!model.canSaveAnyTaggedFiles || model.isBatchBusy)
+
+                Button("Turn Posters Off For Batch") {
+                    model.setArtworkSavingForAll(false)
+                }
+                .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+                .disabled(model.files.isEmpty)
+            }
+        }
+        .padding(16)
+        .retroPanel(accent: RetroTheme.cyan)
     }
 }
 
@@ -1256,6 +1316,7 @@ private struct HelpView: View {
                         rows: [
                             "Filenames like Show.Name.S01E03.mp4 and Show.Name.2x07.mp4 are detected automatically.",
                             "If the filename is generic, folder names help. For example: Severance/Season 2/Episode 04.mp4.",
+                            "For a few episodes from the same show, drop them together and use the TV Batch Deck in the sidebar.",
                             "A Series Only badge means MetaFetch found the show, but not a specific episode yet.",
                             "Add or edit an episode code like S02E04 in the search field for exact episode tags.",
                         ]
@@ -1276,9 +1337,10 @@ private struct HelpView: View {
                         title: "Saving Speed",
                         accent: RetroTheme.gold,
                         rows: [
-                            "Fast Save Metadata tries a metadata-only header update when poster artwork is off.",
-                            "Saving with poster artwork may rewrite the MP4 container, but video/audio are exported with passthrough.",
-                            "The progress bar tracks the current save path and shows when MetaFetch falls back to a full rewrite.",
+                            "MetaFetch first writes Apple/iTunes-style MP4 metadata atoms directly into the movie header when possible.",
+                            "Fast Save All Tagged turns poster artwork off for quicker TV batches.",
+                            "Saving with poster artwork may rebuild the MP4 container, but video/audio are not re-encoded.",
+                            "The progress bar tracks the current save path and shows when MetaFetch falls back.",
                         ]
                     )
 
@@ -1299,6 +1361,7 @@ private struct HelpView: View {
                         rows: [
                             "No matches usually means the query is too noisy. Try a shorter title or add the release year.",
                             "Series Only in TV mode means MetaFetch found the show but still needs a specific episode code.",
+                            "For multi-episode tagging, use Search All Episodes, review the badges, then Fast Save All Tagged.",
                             "If saving is slow, turn off poster artwork so MetaFetch can try the metadata-only fast path.",
                             "If the layout feels cramped, hide the sidebar or widen the app window before reviewing poster cards.",
                         ]
@@ -1321,8 +1384,8 @@ private struct HelpView: View {
                         rows: [
                             "An optional safety mode could create recovery backups for users who prefer protection over fastest saves.",
                             "A manual metadata editor would let you tweak title, synopsis, genre, and artwork before saving.",
-                            "Batch folder scanning could auto-group shows by series and season.",
-                            "A save report could list which files used fast metadata saves versus full MP4 rewrites.",
+                            "A batch save report could show which files used header-only saves versus container rebuilds.",
+                            "A headroom inspector could explain why a file will or will not save quickly before you click Save.",
                         ]
                     )
                 }

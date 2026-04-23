@@ -215,6 +215,60 @@ func seriesOnlyEpisodeSelectionRequiresConfirmationBeforeSave() async throws {
     #expect(MediaFileImportValidator.validatedImportURL(URL(string: "https://example.com/movie.mp4")!) == nil)
 }
 
+@Test func nativeAtomWriterWritesMetadataIntoExistingHeadroom() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("MetaFetchAtomTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    let fileURL = directory.appendingPathComponent("The.Audacity.S01E03.mp4")
+    var mp4 = Data()
+    mp4.append(makeTestAtom("ftyp", payload: Data("isom0000".utf8)))
+    mp4.append(makeTestAtom("moov", payload: Data()))
+    mp4.append(makeTestAtom("free", payload: Data(count: 4096)))
+    mp4.append(makeTestAtom("mdat", payload: Data()))
+    try mp4.write(to: fileURL)
+    let originalSize = try Data(contentsOf: fileURL).count
+
+    let result = MediaSearchResult(
+        trackId: 303,
+        mediaKind: .tvEpisode,
+        trackName: "Episode Three",
+        seriesName: "The Audacity",
+        artistName: "Test Network",
+        releaseDate: "2026-04-20T00:00:00Z",
+        primaryGenreName: "Drama",
+        shortDescription: "A test episode.",
+        longDescription: "A test episode for MP4 atom writing.",
+        contentAdvisoryRating: "TV-14",
+        artworkURL: nil,
+        sourceURL: nil,
+        sourceName: "TVMaze",
+        matchConfidence: .exact,
+        matchSummary: "Exact episode match",
+        matchScore: 200,
+        seasonNumber: 1,
+        episodeNumber: 3
+    )
+
+    try await MP4AtomMetadataWriter().writeMetadata(
+        to: fileURL,
+        using: result,
+        artworkData: nil
+    )
+
+    let taggedData = try Data(contentsOf: fileURL)
+    #expect(taggedData.count == originalSize)
+    #expect(taggedData.range(of: Data([0xA9, 0x6E, 0x61, 0x6D])) != nil)
+    #expect(taggedData.range(of: Data("Episode Three".utf8)) != nil)
+    #expect(taggedData.range(of: Data("tvsh".utf8)) != nil)
+    #expect(taggedData.range(of: Data("The Audacity".utf8)) != nil)
+    #expect(taggedData.range(of: Data("tvsn".utf8)) != nil)
+    #expect(taggedData.range(of: Data("tves".utf8)) != nil)
+}
+
 private func makeResult(
     id: Int,
     title: String,
@@ -244,6 +298,18 @@ private func makeResult(
         seasonNumber: nil,
         episodeNumber: nil
     )
+}
+
+private func makeTestAtom(_ type: String, payload: Data) -> Data {
+    var data = Data()
+    data.append(makeTestUInt32Data(UInt32(payload.count + 8)))
+    data.append(Data(type.utf8))
+    data.append(payload)
+    return data
+}
+
+private func makeTestUInt32Data(_ value: UInt32) -> Data {
+    withUnsafeBytes(of: value.bigEndian) { Data($0) }
 }
 
 private struct StubSearchService: MediaSearchServing {
