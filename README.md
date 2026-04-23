@@ -6,7 +6,7 @@ MetaFetch is a native macOS SwiftUI app for tagging `.mp4` files with movie or T
 
 - Choose `Movie` or `TV Show` when the app starts.
 - Drag and drop one or more `.mp4` files, or use the file picker.
-- Use TV batch controls to search and fast-save several episodes from the same show.
+- Use the TV batch workspace to show multiple episodes as a file list, search the show once, and apply that show to every detected episode.
 - Clean filenames into searchable titles automatically.
 - Detect TV episode codes like `S01E03` and `2x07`.
 - Use folder context for TV files like `Severance/Season 2/Episode 04.mp4`.

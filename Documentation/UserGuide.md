@@ -58,11 +58,16 @@ If MetaFetch shows `Series Only`, it found the show but not a specific episode. 
 
 If you intentionally want to save a series-level result to an episode file, MetaFetch asks you to confirm that choice before the save button is enabled.
 
-For 3 or 4 episodes from the same show, drop them together. The sidebar shows a `TV Batch Deck` with:
+For 3 or 4 episodes from the same show, drop them together. MetaFetch switches the main workspace into a batch layout with the loaded files on one side and a shared show search on the other.
 
-- `Search All Episodes`: Re-runs matching across the whole loaded episode stack.
+Search the show title once, then click the correct show card. MetaFetch applies that show name to each file while preserving each detected episode code, such as `S01E03` or `S01E04`, and searches for the matching episode per file.
+
+Batch controls:
+
+- `Search Show`: Finds the shared show card.
+- Clicking a show card applies that show to every loaded episode file.
 - `Fast Save All Tagged`: Turns poster artwork off and saves every file that already has a selected episode match.
-- `Turn Posters Off For Batch`: Keeps the batch on the quickest metadata-only path before you save.
+- `Posters Off`: Keeps the batch on the quickest metadata-only path before you save.
 
 ## What Gets Written
 
@@ -126,7 +131,7 @@ If the update checker says a release has no installable asset, open the release 
 
 - If search returns the wrong title, edit the search field and search again.
 - If TV mode only finds the series, add an episode code like `S01E03`.
-- If you are tagging several TV episodes, use the `TV Batch Deck` in the sidebar to search all, review badges, and fast-save selected matches.
+- If you are tagging several TV episodes, use the batch workspace to search the show once, apply it to all files, review badges, and fast-save selected matches.
 - If the sidebar is hidden, use `Hide Sidebar` / `Show Sidebar` in the toolbar.
 - If saving is slow, turn off poster artwork and use `Fast Save Metadata`.
 - If a newly converted MP4 never accepts tags quickly, rebuild it with MP4 metadata headroom such as `-moov_size 16777216`.

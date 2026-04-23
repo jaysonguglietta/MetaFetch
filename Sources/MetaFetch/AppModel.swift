@@ -32,6 +32,12 @@ final class AppModel: ObservableObject {
     @Published var noticeMessage: String?
     @Published var selectedMode: MediaLibraryMode?
     @Published var updateState: AppUpdateState = .idle
+    @Published var batchQueryText = ""
+    @Published var batchSearchResults: [MediaSearchResult] = []
+    @Published var selectedBatchResult: MediaSearchResult?
+    @Published var isBatchSearching = false
+    @Published var batchStatusMessage = "Search for the show once, then apply it to every loaded episode."
+    @Published var batchErrorMessage: String?
 
     private let searchService: MediaSearchServing
     private let metadataWriter: MetadataWriting
@@ -94,6 +100,7 @@ final class AppModel: ObservableObject {
         }
 
         selectedMode = mode
+        resetBatchSearch()
         noticeMessage = nil
     }
 
@@ -104,6 +111,7 @@ final class AppModel: ObservableObject {
 
         selectedMode = nil
         noticeMessage = nil
+        resetBatchSearch()
     }
 
     func startOver() {
@@ -111,6 +119,7 @@ final class AppModel: ObservableObject {
         selectedFileID = nil
         selectedMode = nil
         noticeMessage = nil
+        resetBatchSearch()
     }
 
     func importFiles(from urls: [URL]) {
@@ -143,6 +152,7 @@ final class AppModel: ObservableObject {
 
         noticeMessage = nil
         files.append(contentsOf: newEntries)
+        refreshBatchQuerySuggestion()
 
         if selectedFileID == nil {
             selectedFileID = newEntries.first?.id
@@ -164,6 +174,10 @@ final class AppModel: ObservableObject {
 
         if let selectedFileID, removedIDs.contains(selectedFileID) {
             self.selectedFileID = files.first?.id
+        }
+
+        if files.isEmpty {
+            resetBatchSearch()
         }
     }
 
@@ -296,6 +310,73 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func searchBatchShow() async {
+        let query = batchQueryText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            batchErrorMessage = "Enter a show title first."
+            batchStatusMessage = "Waiting for a show title"
+            return
+        }
+
+        isBatchSearching = true
+        batchErrorMessage = nil
+        batchStatusMessage = "Searching show matches for “\(query)”"
+
+        do {
+            let results = try await searchService.search(matching: query, mode: .tvShow)
+            batchSearchResults = results
+            selectedBatchResult = SearchSelectionPolicy.suggestedAutoSelection(from: results)
+            isBatchSearching = false
+
+            if let selectedBatchResult {
+                batchStatusMessage = "Auto-selected \(selectedBatchResult.trackName). Click a card to apply a different show."
+            } else if results.isEmpty {
+                batchStatusMessage = "No show matches found"
+                batchErrorMessage = "Try a shorter show title."
+            } else {
+                batchStatusMessage = "Pick the show card that should drive this episode batch."
+            }
+
+            let artworkURLs = results
+                .prefix(6)
+                .compactMap(\.artworkURL)
+
+            await ArtworkPipeline.shared.prefetch(urls: Array(artworkURLs))
+        } catch {
+            isBatchSearching = false
+            batchStatusMessage = "Batch search failed"
+            batchErrorMessage = error.localizedDescription
+        }
+    }
+
+    func applyBatchResultToAllFiles(_ result: MediaSearchResult) async {
+        guard selectedMode == .tvShow else {
+            return
+        }
+
+        let showTitle = (result.seriesName ?? result.trackName)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !showTitle.isEmpty else {
+            batchErrorMessage = "That result does not have a usable show title."
+            return
+        }
+
+        selectedBatchResult = result
+        batchErrorMessage = nil
+        batchStatusMessage = "Applying \(showTitle) to \(files.count) episode\(files.count == 1 ? "" : "s")"
+
+        for entry in files where entry.mediaMode == .tvShow {
+            let parsedQuery = entry.parsedCurrentQuery
+            entry.queryText = [showTitle, parsedQuery.episodeCode]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            await search(file: entry)
+        }
+
+        batchStatusMessage = "Applied \(showTitle). Review any yellow badges, then fast-save the tagged files."
+    }
+
     func searchAllFiles() async {
         for entry in files {
             await search(file: entry)
@@ -405,6 +486,32 @@ final class AppModel: ObservableObject {
         case .tvShow:
             return "Searching TV matches for “\(query)”"
         }
+    }
+
+    private func refreshBatchQuerySuggestion() {
+        guard selectedMode == .tvShow,
+              batchQueryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+
+        let titles = files
+            .map { $0.parsedCurrentQuery.title.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard let title = titles.first else {
+            return
+        }
+
+        batchQueryText = title
+    }
+
+    private func resetBatchSearch() {
+        batchQueryText = ""
+        batchSearchResults = []
+        selectedBatchResult = nil
+        isBatchSearching = false
+        batchStatusMessage = "Search for the show once, then apply it to every loaded episode."
+        batchErrorMessage = nil
     }
 }
 

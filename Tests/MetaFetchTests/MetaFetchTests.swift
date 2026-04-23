@@ -269,6 +269,42 @@ func seriesOnlyEpisodeSelectionRequiresConfirmationBeforeSave() async throws {
     #expect(taggedData.range(of: Data("tves".utf8)) != nil)
 }
 
+@Test
+@MainActor
+func applyingBatchShowKeepsEachDetectedEpisodeCode() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("MetaFetchBatchTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    let firstEpisode = directory.appendingPathComponent("Wrong.Show.S01E03.mp4")
+    let secondEpisode = directory.appendingPathComponent("Wrong.Show.S01E04.mp4")
+    FileManager.default.createFile(atPath: firstEpisode.path, contents: Data([0x00]))
+    FileManager.default.createFile(atPath: secondEpisode.path, contents: Data([0x00]))
+
+    let showResult = makeResult(
+        id: 303,
+        title: "The Audacity",
+        year: "2026",
+        mediaKind: .tvSeries,
+        confidence: .exact,
+        summary: "Exact show match",
+        score: 200
+    )
+    let model = AppModel(searchService: StubSearchService(results: [showResult]))
+    model.chooseMode(.tvShow)
+    model.importFiles(from: [firstEpisode, secondEpisode])
+
+    await model.applyBatchResultToAllFiles(showResult)
+
+    #expect(model.files.map(\.queryText) == [
+        "The Audacity S01E03",
+        "The Audacity S01E04",
+    ])
+}
+
 private func makeResult(
     id: Int,
     title: String,
