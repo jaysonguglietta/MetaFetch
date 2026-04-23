@@ -306,6 +306,60 @@ func applyingBatchShowKeepsEachDetectedEpisodeCode() async throws {
     ])
 }
 
+@Test
+@MainActor
+func saveAllTaggedFilesWritesEveryReadyEpisode() async throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("MetaFetchBatchSaveTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    let firstEpisode = directory.appendingPathComponent("The.Audacity.S01E02.mp4")
+    let secondEpisode = directory.appendingPathComponent("The.Audacity.S01E03.mp4")
+    FileManager.default.createFile(atPath: firstEpisode.path, contents: Data([0x00]))
+    FileManager.default.createFile(atPath: secondEpisode.path, contents: Data([0x00]))
+
+    let metadataWriter = RecordingMetadataWriter()
+    let defaultEpisodeResult = makeEpisodeResult(
+        id: 202,
+        title: "Shine Brightly",
+        episodeNumber: 2
+    )
+    let model = AppModel(
+        searchService: StubSearchService(results: [defaultEpisodeResult]),
+        metadataWriter: metadataWriter
+    )
+    model.chooseMode(.tvShow)
+    model.importFiles(from: [firstEpisode, secondEpisode])
+    await model.search(file: model.files[0])
+    await model.search(file: model.files[1])
+
+    model.files[0].selectedResult = makeEpisodeResult(
+        id: 202,
+        title: "Shine Brightly",
+        episodeNumber: 2
+    )
+    model.files[1].selectedResult = makeEpisodeResult(
+        id: 203,
+        title: "Valley of Heart's Delight",
+        episodeNumber: 3
+    )
+
+    #expect(model.saveReadyCount == 2)
+    #expect(model.saveAllButtonTitle == "Save 2 + Posters")
+
+    await model.saveAllTaggedFiles()
+
+    #expect(metadataWriter.savedPaths == [
+        firstEpisode.standardizedFileURL.path,
+        secondEpisode.standardizedFileURL.path,
+    ])
+    #expect(model.files.allSatisfy { $0.lastSavedAt != nil })
+    #expect(model.batchStatusMessage == "Verified metadata and available poster artwork on 2 episodes.")
+}
+
 private func makeResult(
     id: Int,
     title: String,
@@ -337,6 +391,33 @@ private func makeResult(
     )
 }
 
+private func makeEpisodeResult(
+    id: Int,
+    title: String,
+    episodeNumber: Int
+) -> MediaSearchResult {
+    MediaSearchResult(
+        trackId: id,
+        mediaKind: .tvEpisode,
+        trackName: title,
+        seriesName: "The Audacity",
+        artistName: "AMC+",
+        releaseDate: "2026-01-01T00:00:00Z",
+        primaryGenreName: "Drama",
+        shortDescription: "Test episode",
+        longDescription: "Test episode.",
+        contentAdvisoryRating: nil,
+        artworkURL: nil,
+        sourceURL: nil,
+        sourceName: "TVMaze",
+        matchConfidence: .exact,
+        matchSummary: "Exact episode match",
+        matchScore: 200,
+        seasonNumber: 1,
+        episodeNumber: episodeNumber
+    )
+}
+
 private func makeTestAtom(_ type: String, payload: Data) -> Data {
     var data = Data()
     data.append(makeTestUInt32Data(UInt32(payload.count + 8)))
@@ -354,5 +435,26 @@ private struct StubSearchService: MediaSearchServing {
 
     func search(matching query: String, mode: MediaLibraryMode) async throws -> [MediaSearchResult] {
         results
+    }
+}
+
+private final class RecordingMetadataWriter: MetadataWriting, @unchecked Sendable {
+    private(set) var calls: [(fileURL: URL, result: MediaSearchResult, includeArtwork: Bool)] = []
+
+    var savedPaths: [String] {
+        calls.map { $0.fileURL.standardizedFileURL.path }
+    }
+
+    func writeMetadata(
+        to fileURL: URL,
+        using result: MediaSearchResult,
+        includeArtwork: Bool,
+        progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)?
+    ) async throws {
+        await progressHandler?(MetadataWriteProgress(
+            fractionCompleted: 1,
+            message: "Verified test save"
+        ))
+        calls.append((fileURL.standardizedFileURL, result, includeArtwork))
     }
 }

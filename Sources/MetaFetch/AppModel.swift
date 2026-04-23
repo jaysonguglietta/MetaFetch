@@ -36,6 +36,7 @@ final class AppModel: ObservableObject {
     @Published var batchSearchResults: [MediaSearchResult] = []
     @Published var selectedBatchResult: MediaSearchResult?
     @Published var isBatchSearching = false
+    @Published var isBatchSaving = false
     @Published var batchStatusMessage = "Search for the show once, then apply it to every loaded episode."
     @Published var batchErrorMessage: String?
 
@@ -62,7 +63,7 @@ final class AppModel: ObservableObject {
     }
 
     var canSaveAnyTaggedFiles: Bool {
-        files.contains(where: \.canSave)
+        saveReadyCount > 0
     }
 
     var canUseTVBatchTools: Bool {
@@ -70,7 +71,23 @@ final class AppModel: ObservableObject {
     }
 
     var isBatchBusy: Bool {
-        files.contains { $0.isSearching || $0.isSaving }
+        isBatchSearching || isBatchSaving || files.contains { $0.isSearching || $0.isSaving }
+    }
+
+    var saveReadyCount: Int {
+        files.filter(\.canSave).count
+    }
+
+    var saveAllButtonTitle: String {
+        guard saveReadyCount > 0 else {
+            return selectedMode == .tvShow ? "Save All + Posters" : "Save All Tagged"
+        }
+
+        if selectedMode == .tvShow {
+            return "Save \(saveReadyCount) + Posters"
+        }
+
+        return "Save \(saveReadyCount) Tagged"
     }
 
     var batchMatchedCount: Int {
@@ -243,16 +260,17 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func save(file: MovieFileEntry) async {
+    @discardableResult
+    func save(file: MovieFileEntry) async -> Bool {
         guard let selectedResult = file.selectedResult else {
             file.errorMessage = file.mediaMode.saveSelectionError
-            return
+            return false
         }
 
         if file.requiresSeriesOnlySaveConfirmation {
             file.errorMessage = "This is a series-level TV match for an episode query. Confirm the series-only save before writing metadata."
             file.statusMessage = "Series-only save needs confirmation"
-            return
+            return false
         }
 
         let includeArtwork = file.willSaveArtwork
@@ -288,15 +306,21 @@ final class AppModel: ObservableObject {
             file.saveProgress = nil
             file.statusMessage = "Verified MP4 tags at \(file.lastSavedAt?.formatted(date: .omitted, time: .shortened) ?? "just now")"
             advanceSelection(afterSaving: file)
+            return true
         } catch {
             file.isSaving = false
             file.saveProgress = nil
             file.statusMessage = "Save failed"
             file.errorMessage = error.localizedDescription
+            return false
         }
     }
 
     func saveAllTaggedFiles() async {
+        guard !isBatchSaving else {
+            return
+        }
+
         let taggedFiles = files.filter(\.canSave)
 
         guard !taggedFiles.isEmpty else {
@@ -308,6 +332,11 @@ final class AppModel: ObservableObject {
             return
         }
 
+        isBatchSaving = true
+        defer {
+            isBatchSaving = false
+        }
+
         if canUseTVBatchTools {
             batchErrorMessage = nil
             batchStatusMessage = "Saving and verifying \(taggedFiles.count) tagged episode\(taggedFiles.count == 1 ? "" : "s")"
@@ -315,12 +344,12 @@ final class AppModel: ObservableObject {
 
         var verifiedSaveCount = 0
 
-        for entry in taggedFiles {
-            let previousSavedAt = entry.lastSavedAt
-            await save(file: entry)
+        for (index, entry) in taggedFiles.enumerated() {
+            if canUseTVBatchTools {
+                batchStatusMessage = "Saving \(index + 1) of \(taggedFiles.count): \(entry.filename)"
+            }
 
-            if entry.lastSavedAt != nil,
-               entry.lastSavedAt != previousSavedAt {
+            if await save(file: entry) {
                 verifiedSaveCount += 1
             }
         }
@@ -332,7 +361,7 @@ final class AppModel: ObservableObject {
         let failedCount = taggedFiles.count - verifiedSaveCount
         if failedCount == 0 {
             batchErrorMessage = nil
-            batchStatusMessage = "Verified metadata and poster artwork on \(verifiedSaveCount) episode\(verifiedSaveCount == 1 ? "" : "s")."
+            batchStatusMessage = "Verified metadata and available poster artwork on \(verifiedSaveCount) episode\(verifiedSaveCount == 1 ? "" : "s")."
         } else {
             batchErrorMessage = "\(failedCount) episode\(failedCount == 1 ? "" : "s") did not verify. Check the yellow rows for details."
             batchStatusMessage = "Verified \(verifiedSaveCount) of \(taggedFiles.count) tagged episode\(taggedFiles.count == 1 ? "" : "s")."
@@ -529,6 +558,7 @@ final class AppModel: ObservableObject {
         batchSearchResults = []
         selectedBatchResult = nil
         isBatchSearching = false
+        isBatchSaving = false
         batchStatusMessage = "Search for the show once, then apply it to every loaded episode."
         batchErrorMessage = nil
     }

@@ -90,12 +90,12 @@ struct ContentView: View {
                 }
                 .disabled(model.selectedMode == nil)
 
-                Button("Save All Tagged", systemImage: "square.and.arrow.down") {
+                Button(model.saveAllButtonTitle, systemImage: "square.and.arrow.down") {
                     Task {
                         await model.saveAllTaggedFiles()
                     }
                 }
-                .disabled(!model.canSaveAnyTaggedFiles)
+                .disabled(!model.canSaveAnyTaggedFiles || model.isBatchBusy)
             }
         }
         .sheet(isPresented: $isHelpPresented) {
@@ -248,7 +248,7 @@ private struct TVBatchPanel: View {
                 .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.cyan))
                 .disabled(model.files.isEmpty || model.isBatchBusy)
 
-                Button("Save All Tagged + Posters") {
+                Button(model.saveAllButtonTitle) {
                     Task {
                         await model.saveAllTaggedFiles()
                     }
@@ -701,7 +701,7 @@ private struct TVBatchWorkspaceView: View {
                 }
                 .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
 
-                Button("Save All + Posters") {
+                Button(model.saveAllButtonTitle) {
                     Task {
                         await model.saveAllTaggedFiles()
                     }
