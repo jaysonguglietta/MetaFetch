@@ -286,7 +286,7 @@ final class AppModel: ObservableObject {
             file.lastSavedAt = Date()
             file.isSaving = false
             file.saveProgress = nil
-            file.statusMessage = "Saved metadata at \(file.lastSavedAt?.formatted(date: .omitted, time: .shortened) ?? "just now")"
+            file.statusMessage = "Verified MP4 tags at \(file.lastSavedAt?.formatted(date: .omitted, time: .shortened) ?? "just now")"
             advanceSelection(afterSaving: file)
         } catch {
             file.isSaving = false
@@ -297,16 +297,45 @@ final class AppModel: ObservableObject {
     }
 
     func saveAllTaggedFiles() async {
-        await saveAllTaggedFiles(metadataOnly: false)
-    }
+        let taggedFiles = files.filter(\.canSave)
 
-    func saveAllTaggedFiles(metadataOnly: Bool) async {
-        if metadataOnly {
-            setArtworkSavingForAll(false)
+        guard !taggedFiles.isEmpty else {
+            noticeMessage = "No tagged files are ready to save yet."
+            if canUseTVBatchTools {
+                batchErrorMessage = "No tagged episodes are ready to save yet."
+                batchStatusMessage = "Pick or apply matches before saving the batch."
+            }
+            return
         }
 
-        for entry in files where entry.canSave {
+        if canUseTVBatchTools {
+            batchErrorMessage = nil
+            batchStatusMessage = "Saving and verifying \(taggedFiles.count) tagged episode\(taggedFiles.count == 1 ? "" : "s")"
+        }
+
+        var verifiedSaveCount = 0
+
+        for entry in taggedFiles {
+            let previousSavedAt = entry.lastSavedAt
             await save(file: entry)
+
+            if entry.lastSavedAt != nil,
+               entry.lastSavedAt != previousSavedAt {
+                verifiedSaveCount += 1
+            }
+        }
+
+        guard canUseTVBatchTools else {
+            return
+        }
+
+        let failedCount = taggedFiles.count - verifiedSaveCount
+        if failedCount == 0 {
+            batchErrorMessage = nil
+            batchStatusMessage = "Verified metadata and poster artwork on \(verifiedSaveCount) episode\(verifiedSaveCount == 1 ? "" : "s")."
+        } else {
+            batchErrorMessage = "\(failedCount) episode\(failedCount == 1 ? "" : "s") did not verify. Check the yellow rows for details."
+            batchStatusMessage = "Verified \(verifiedSaveCount) of \(taggedFiles.count) tagged episode\(taggedFiles.count == 1 ? "" : "s")."
         }
     }
 
@@ -381,16 +410,6 @@ final class AppModel: ObservableObject {
         for entry in files {
             await search(file: entry)
         }
-    }
-
-    func setArtworkSavingForAll(_ includeArtwork: Bool) {
-        for entry in files {
-            entry.includeArtworkWhenSaving = includeArtwork
-        }
-
-        noticeMessage = includeArtwork
-            ? "Poster artwork will be included for all loaded files when available."
-            : "Poster artwork is off for all loaded files, so batch saves will use the fastest metadata path."
     }
 
     func checkForUpdates() async {

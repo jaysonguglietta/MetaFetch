@@ -260,6 +260,13 @@ struct MP4MetadataWriter: MetadataWriting {
         at fileURL: URL,
         expectation: MetadataVerificationExpectation
     ) async -> Bool {
+        if (try? atomWriter.metadataWasPersisted(
+            at: fileURL,
+            result: expectation.result
+        )) == true {
+            return true
+        }
+
         let asset = AVURLAsset(url: fileURL)
         var metadataItems: [AVMetadataItem] = []
 
@@ -562,9 +569,12 @@ private struct MetadataVerificationExpectation {
         let identifiers: Set<AVMetadataIdentifier>
     }
 
+    let result: MediaSearchResult
     let requiredStrings: [RequiredString]
 
     init(result: MediaSearchResult) {
+        self.result = result
+
         // Keep verification conservative: long descriptions and specialty atoms can be normalized
         // differently by AVFoundation, but title/album atoms should survive every successful save.
         var requiredStrings = [

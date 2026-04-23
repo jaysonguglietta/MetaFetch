@@ -24,7 +24,6 @@ final class MovieFileEntry: ObservableObject, Identifiable {
     @Published var isSearching = false
     @Published var isSaving = false
     @Published var saveProgress: Double?
-    @Published var includeArtworkWhenSaving = true
     @Published var allowsSeriesOnlySave = false
     @Published var errorMessage: String?
     @Published var statusMessage: String
@@ -53,7 +52,7 @@ final class MovieFileEntry: ObservableObject, Identifiable {
     }
 
     var willSaveArtwork: Bool {
-        includeArtworkWhenSaving && hasSelectedArtwork
+        hasSelectedArtwork
     }
 
     var saveActionLabel: String {
@@ -67,10 +66,6 @@ final class MovieFileEntry: ObservableObject, Identifiable {
     var saveModeSummary: String {
         if willSaveArtwork {
             return "Includes poster artwork. Best presentation, slightly slower save."
-        }
-
-        if hasSelectedArtwork {
-            return "Poster art is off for a quicker save. MetaFetch will try a metadata-only header update first, then fall back to a full rewrite if needed."
         }
 
         return "No poster art is available, so MetaFetch will try a metadata-only header update first and fall back to a full rewrite only if needed."

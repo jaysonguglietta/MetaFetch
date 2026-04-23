@@ -64,10 +64,9 @@ Search the show title once, then click the correct show card. MetaFetch applies 
 
 Batch controls:
 
-- `Search Show`: Finds the shared show card.
+- `Search Show`: Finds shared show cards in the right-side search table.
 - Clicking a show card applies that show to every loaded episode file.
-- `Fast Save All Tagged`: Turns poster artwork off and saves every file that already has a selected episode match.
-- `Posters Off`: Keeps the batch on the quickest metadata-only path before you save.
+- `Save All Tagged + Posters`: Saves every file that already has a selected episode match, including poster artwork when the source provides it.
 
 ## What Gets Written
 
@@ -94,7 +93,7 @@ Use `Open Source` on result cards to inspect the source page before choosing a m
 
 ## Save Speed
 
-`Fast Save Metadata` appears when poster artwork is off or unavailable. MetaFetch first tries its native MP4 atom writer, which can update metadata in the existing movie header when the file has enough headroom.
+`Fast Save Metadata` appears when no poster artwork is available from the source. MetaFetch first tries its native MP4 atom writer, which can update metadata in the existing movie header when the file has enough headroom.
 
 `Save Metadata + Poster` includes artwork. This may take longer because artwork needs more metadata space. If there is not enough header room, MetaFetch rebuilds the MP4 container and adjusts chunk offsets without re-encoding video or audio. AVFoundation remains a final fallback for unusual files.
 
@@ -131,9 +130,9 @@ If the update checker says a release has no installable asset, open the release 
 
 - If search returns the wrong title, edit the search field and search again.
 - If TV mode only finds the series, add an episode code like `S01E03`.
-- If you are tagging several TV episodes, use the batch workspace to search the show once, apply it to all files, review badges, and fast-save selected matches.
+- If you are tagging several TV episodes, use the batch workspace to search the show once, apply it to all files, review badges, and save all selected matches with posters.
 - If the sidebar is hidden, use `Hide Sidebar` / `Show Sidebar` in the toolbar.
-- If saving is slow, turn off poster artwork and use `Fast Save Metadata`.
+- If saving is slow, the MP4 may not have enough metadata headroom for a poster and may need a container rebuild.
 - If a newly converted MP4 never accepts tags quickly, rebuild it with MP4 metadata headroom such as `-moov_size 16777216`.
 - If update checking fails, confirm you can reach GitHub and that the latest release includes a `.dmg`, `.zip`, or `.pkg` asset.
 - If the app feels stuck on a bad batch, use `Start Over` to clear the queue and choose a mode again.

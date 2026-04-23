@@ -111,6 +111,38 @@ struct MP4AtomMetadataWriter: Sendable {
         )
     }
 
+    func metadataWasPersisted(
+        at fileURL: URL,
+        result: MediaSearchResult
+    ) throws -> Bool {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer {
+            try? handle.close()
+        }
+
+        let fileSize = try handle.seekToEnd()
+        let topLevelBoxes = try readTopLevelBoxes(from: handle, fileSize: fileSize)
+
+        guard let movieBox = topLevelBoxes.first(where: { $0.type == .moov }) else {
+            return false
+        }
+
+        try handle.seek(toOffset: movieBox.start)
+        let movieAtomData = handle.readData(ofLength: Int(movieBox.size))
+        guard UInt64(movieAtomData.count) == movieBox.size else {
+            return false
+        }
+
+        let textMetadata = try readTextMetadata(from: movieAtomData)
+        return expectedTextRequirements(for: result).allSatisfy { requirement in
+            requirement.types.contains(where: { type in
+                textMetadata[type]?.contains { value in
+                    normalize(value) == normalize(requirement.value)
+                } == true
+            })
+        }
+    }
+
     private func writeInPlaceIfPossible(
         _ updatedMovieAtom: Data,
         to fileURL: URL,
@@ -462,6 +494,85 @@ struct MP4AtomMetadataWriter: Sendable {
         return try makeAtom(type: type, payload: makeAtom(type: .data, payload: dataPayload))
     }
 
+    private func readTextMetadata(from movieAtomData: Data) throws -> [MP4AtomType: [String]] {
+        let rootAtoms = try parseAtoms(in: movieAtomData, range: 0..<movieAtomData.count)
+        guard let movieAtom = rootAtoms.first(where: { $0.type == .moov }),
+              let userDataAtom = try firstAtom(.udta, in: movieAtomData, range: movieAtom.payloadRange),
+              let metaAtom = try firstAtom(.meta, in: movieAtomData, range: userDataAtom.payloadRange) else {
+            return [:]
+        }
+
+        guard metaAtom.payloadRange.count >= 4 else {
+            return [:]
+        }
+
+        let metaChildrenRange = (metaAtom.payloadRange.lowerBound + 4)..<metaAtom.payloadRange.upperBound
+        guard let itemListAtom = try firstAtom(.ilst, in: movieAtomData, range: metaChildrenRange) else {
+            return [:]
+        }
+
+        let metadataItemAtoms = try parseAtoms(in: movieAtomData, range: itemListAtom.payloadRange)
+        var valuesByType: [MP4AtomType: [String]] = [:]
+
+        for itemAtom in metadataItemAtoms {
+            let dataAtoms = try parseAtoms(in: movieAtomData, range: itemAtom.payloadRange)
+                .filter { $0.type == .data }
+
+            for dataAtom in dataAtoms {
+                guard dataAtom.payloadRange.count >= 8 else {
+                    continue
+                }
+
+                let dataType = readUInt32(movieAtomData, at: dataAtom.payloadRange.lowerBound)
+                guard dataType == 1 else {
+                    continue
+                }
+
+                let valueRange = (dataAtom.payloadRange.lowerBound + 8)..<dataAtom.payloadRange.upperBound
+                guard let value = String(data: movieAtomData.subdata(in: valueRange), encoding: .utf8),
+                      value.trimmedNilIfBlank != nil else {
+                    continue
+                }
+
+                valuesByType[itemAtom.type, default: []].append(value)
+            }
+        }
+
+        return valuesByType
+    }
+
+    private func firstAtom(
+        _ type: MP4AtomType,
+        in data: Data,
+        range: Range<Int>
+    ) throws -> MP4MemoryAtom? {
+        try parseAtoms(in: data, range: range)
+            .first { $0.type == type }
+    }
+
+    private func expectedTextRequirements(for result: MediaSearchResult) -> [TextRequirement] {
+        var requirements = [
+            TextRequirement(value: result.trackName, types: [.name]),
+        ]
+
+        switch result.mediaKind {
+        case .movie:
+            break
+        case .tvEpisode:
+            if let seriesName = result.seriesName?.trimmedNilIfBlank {
+                requirements.append(TextRequirement(value: seriesName, types: [.tvShow, .album]))
+            }
+        case .tvSeries:
+            requirements.append(TextRequirement(value: result.trackName, types: [.tvShow, .album]))
+        }
+
+        return requirements
+    }
+
+    private func normalize(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func readTopLevelBoxes(
         from handle: FileHandle,
         fileSize: UInt64
@@ -756,6 +867,11 @@ private struct MP4MemoryAtom: Sendable {
     let type: MP4AtomType
     let fullRange: Range<Int>
     let payloadRange: Range<Int>
+}
+
+private struct TextRequirement: Sendable {
+    let value: String
+    let types: Set<MP4AtomType>
 }
 
 private struct MP4AtomType: Hashable, Sendable {

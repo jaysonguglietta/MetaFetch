@@ -267,6 +267,7 @@ func seriesOnlyEpisodeSelectionRequiresConfirmationBeforeSave() async throws {
     #expect(taggedData.range(of: Data("The Audacity".utf8)) != nil)
     #expect(taggedData.range(of: Data("tvsn".utf8)) != nil)
     #expect(taggedData.range(of: Data("tves".utf8)) != nil)
+    #expect(try MP4AtomMetadataWriter().metadataWasPersisted(at: fileURL, result: result))
 }
 
 @Test
