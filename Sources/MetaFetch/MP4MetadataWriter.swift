@@ -23,6 +23,7 @@ struct MP4MetadataWriter: MetadataWriting {
         case exportFailed
         case exportCancelled
         case metadataVerificationFailed
+        case artworkUnavailable
 
         var errorDescription: String? {
             switch self {
@@ -36,6 +37,8 @@ struct MP4MetadataWriter: MetadataWriting {
                 return "The MP4 export was cancelled."
             case .metadataVerificationFailed:
                 return "MetaFetch could not verify that the metadata was written to the MP4."
+            case .artworkUnavailable:
+                return "MetaFetch could not prepare the selected poster artwork."
             }
         }
     }
@@ -52,7 +55,14 @@ struct MP4MetadataWriter: MetadataWriting {
         let artworkData = includeArtwork
             ? try await ArtworkPipeline.shared.preparedArtwork(for: result.artworkURL)
             : nil
-        let verificationExpectation = MetadataVerificationExpectation(result: result)
+        if includeArtwork && artworkData == nil {
+            throw WriterError.artworkUnavailable
+        }
+
+        let verificationExpectation = MetadataVerificationExpectation(
+            result: result,
+            requiresArtwork: includeArtwork
+        )
 
         if await attemptNativeAtomWrite(
             to: fileURL,
@@ -262,9 +272,14 @@ struct MP4MetadataWriter: MetadataWriting {
     ) async -> Bool {
         if (try? atomWriter.metadataWasPersisted(
             at: fileURL,
-            result: expectation.result
+            result: expectation.result,
+            expectsArtwork: expectation.requiresArtwork
         )) == true {
             return true
+        }
+
+        guard !expectation.requiresPreciseAtomVerification else {
+            return false
         }
 
         let asset = AVURLAsset(url: fileURL)
@@ -571,9 +586,14 @@ private struct MetadataVerificationExpectation {
 
     let result: MediaSearchResult
     let requiredStrings: [RequiredString]
+    let requiresArtwork: Bool
+    let requiresPreciseAtomVerification: Bool
 
-    init(result: MediaSearchResult) {
+    init(result: MediaSearchResult, requiresArtwork: Bool) {
         self.result = result
+        self.requiresArtwork = requiresArtwork
+        self.requiresPreciseAtomVerification = result.mediaKind == .tvEpisode &&
+            (result.seasonNumber != nil || result.episodeNumber != nil)
 
         // Keep verification conservative: long descriptions and specialty atoms can be normalized
         // differently by AVFoundation, but title/album atoms should survive every successful save.
@@ -617,6 +637,35 @@ private struct MetadataVerificationExpectation {
     }
 
     func isSatisfied(by metadataItems: [AVMetadataItem]) async -> Bool {
+        if requiresArtwork {
+            let artworkIdentifiers: Set<AVMetadataIdentifier> = [
+                .commonIdentifierArtwork,
+                .quickTimeMetadataArtwork,
+                .iTunesMetadataCoverArt,
+            ]
+            var hasArtwork = false
+            for item in metadataItems {
+                guard let identifier = item.identifier,
+                      artworkIdentifiers.contains(identifier) else {
+                    continue
+                }
+
+                if let dataValue = try? await item.load(.dataValue), !dataValue.isEmpty {
+                    hasArtwork = true
+                    break
+                }
+
+                if let value = try? await item.load(.value) as? Data, !value.isEmpty {
+                    hasArtwork = true
+                    break
+                }
+            }
+
+            guard hasArtwork else {
+                return false
+            }
+        }
+
         for requiredString in requiredStrings {
             var foundMatch = false
 

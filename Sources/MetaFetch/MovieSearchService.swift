@@ -770,28 +770,32 @@ private struct TVMazeSearchService {
         seasonNumber: Int,
         episodeNumber: Int
     ) async throws -> [MediaSearchResult] {
-        try await withThrowingTaskGroup(of: MediaSearchResult?.self) { group in
+        await withTaskGroup(of: MediaSearchResult?.self) { group in
             for hit in hits {
                 group.addTask {
-                    guard let episode = try await fetchEpisode(
-                        forShowID: hit.show.id,
-                        seasonNumber: seasonNumber,
-                        episodeNumber: episodeNumber
-                    ) else {
+                    do {
+                        guard let episode = try await fetchEpisode(
+                            forShowID: hit.show.id,
+                            seasonNumber: seasonNumber,
+                            episodeNumber: episodeNumber
+                        ) else {
+                            return nil
+                        }
+
+                        return buildEpisodeResult(
+                            episode: episode,
+                            show: hit.show,
+                            showScore: hit.score,
+                            parsedQuery: parsedQuery
+                        )
+                    } catch {
                         return nil
                     }
-
-                    return buildEpisodeResult(
-                        episode: episode,
-                        show: hit.show,
-                        showScore: hit.score,
-                        parsedQuery: parsedQuery
-                    )
                 }
             }
 
             var matches: [MediaSearchResult] = []
-            for try await result in group {
+            for await result in group {
                 if let result {
                     matches.append(result)
                 }

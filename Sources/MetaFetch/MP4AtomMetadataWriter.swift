@@ -113,7 +113,8 @@ struct MP4AtomMetadataWriter: Sendable {
 
     func metadataWasPersisted(
         at fileURL: URL,
-        result: MediaSearchResult
+        result: MediaSearchResult,
+        expectsArtwork: Bool = false
     ) throws -> Bool {
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer {
@@ -133,14 +134,30 @@ struct MP4AtomMetadataWriter: Sendable {
             return false
         }
 
-        let textMetadata = try readTextMetadata(from: movieAtomData)
-        return expectedTextRequirements(for: result).allSatisfy { requirement in
+        let metadata = try readMetadata(from: movieAtomData)
+        guard expectedTextRequirements(for: result).allSatisfy({ requirement in
             requirement.types.contains(where: { type in
-                textMetadata[type]?.contains { value in
+                metadata.textValuesByType[type]?.contains { value in
                     normalize(value) == normalize(requirement.value)
                 } == true
             })
+        }) else {
+            return false
         }
+
+        guard expectedIntegerRequirements(for: result).allSatisfy({ requirement in
+            requirement.types.contains(where: { type in
+                metadata.integerValuesByType[type]?.contains(requirement.value) == true
+            })
+        }) else {
+            return false
+        }
+
+        if expectsArtwork && !metadata.hasArtwork {
+            return false
+        }
+
+        return true
     }
 
     private func writeInPlaceIfPossible(
@@ -521,25 +538,25 @@ struct MP4AtomMetadataWriter: Sendable {
         return try makeAtom(type: type, payload: makeAtom(type: .data, payload: dataPayload))
     }
 
-    private func readTextMetadata(from movieAtomData: Data) throws -> [MP4AtomType: [String]] {
+    private func readMetadata(from movieAtomData: Data) throws -> ParsedMP4Metadata {
         let rootAtoms = try parseAtoms(in: movieAtomData, range: 0..<movieAtomData.count)
         guard let movieAtom = rootAtoms.first(where: { $0.type == .moov }),
               let userDataAtom = try firstAtom(.udta, in: movieAtomData, range: movieAtom.payloadRange),
               let metaAtom = try firstAtom(.meta, in: movieAtomData, range: userDataAtom.payloadRange) else {
-            return [:]
+            return ParsedMP4Metadata()
         }
 
         guard metaAtom.payloadRange.count >= 4 else {
-            return [:]
+            return ParsedMP4Metadata()
         }
 
         let metaChildrenRange = (metaAtom.payloadRange.lowerBound + 4)..<metaAtom.payloadRange.upperBound
         guard let itemListAtom = try firstAtom(.ilst, in: movieAtomData, range: metaChildrenRange) else {
-            return [:]
+            return ParsedMP4Metadata()
         }
 
         let metadataItemAtoms = try parseAtoms(in: movieAtomData, range: itemListAtom.payloadRange)
-        var valuesByType: [MP4AtomType: [String]] = [:]
+        var parsedMetadata = ParsedMP4Metadata()
 
         for itemAtom in metadataItemAtoms {
             let dataAtoms = try parseAtoms(in: movieAtomData, range: itemAtom.payloadRange)
@@ -551,21 +568,25 @@ struct MP4AtomMetadataWriter: Sendable {
                 }
 
                 let dataType = readUInt32(movieAtomData, at: dataAtom.payloadRange.lowerBound)
-                guard dataType == 1 else {
-                    continue
-                }
-
                 let valueRange = (dataAtom.payloadRange.lowerBound + 8)..<dataAtom.payloadRange.upperBound
-                guard let value = String(data: movieAtomData.subdata(in: valueRange), encoding: .utf8),
-                      value.trimmedNilIfBlank != nil else {
-                    continue
-                }
+                let payload = movieAtomData.subdata(in: valueRange)
 
-                valuesByType[itemAtom.type, default: []].append(value)
+                if dataType == 1,
+                   let value = String(data: payload, encoding: .utf8),
+                   value.trimmedNilIfBlank != nil {
+                    parsedMetadata.textValuesByType[itemAtom.type, default: []].append(value)
+                } else if dataType == 21,
+                          let value = unsignedIntegerValue(from: payload) {
+                    parsedMetadata.integerValuesByType[itemAtom.type, default: []].append(value)
+                } else if itemAtom.type == .coverArt,
+                          [13, 14].contains(dataType),
+                          !payload.isEmpty {
+                    parsedMetadata.hasArtwork = true
+                }
             }
         }
 
-        return valuesByType
+        return parsedMetadata
     }
 
     private func firstAtom(
@@ -596,8 +617,43 @@ struct MP4AtomMetadataWriter: Sendable {
         return requirements
     }
 
+    private func expectedIntegerRequirements(for result: MediaSearchResult) -> [IntegerRequirement] {
+        var requirements: [IntegerRequirement] = []
+
+        if result.mediaKind == .tvEpisode {
+            requirements.append(IntegerRequirement(value: 10, types: [.mediaKind]))
+
+            if let seasonNumber = result.seasonNumber {
+                requirements.append(IntegerRequirement(value: seasonNumber, types: [.tvSeason]))
+            }
+
+            if let episodeNumber = result.episodeNumber {
+                requirements.append(IntegerRequirement(value: episodeNumber, types: [.tvEpisode]))
+            }
+        }
+
+        return requirements
+    }
+
     private func normalize(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func unsignedIntegerValue(from data: Data) -> Int? {
+        guard !data.isEmpty,
+              data.count <= MemoryLayout<UInt64>.size else {
+            return nil
+        }
+
+        let value = data.reduce(UInt64(0)) { partialResult, byte in
+            (partialResult << 8) | UInt64(byte)
+        }
+
+        guard value <= UInt64(Int.max) else {
+            return nil
+        }
+
+        return Int(value)
     }
 
     private func readTopLevelBoxes(
@@ -903,6 +959,17 @@ private struct MP4MemoryAtom: Sendable {
 private struct TextRequirement: Sendable {
     let value: String
     let types: Set<MP4AtomType>
+}
+
+private struct IntegerRequirement: Sendable {
+    let value: Int
+    let types: Set<MP4AtomType>
+}
+
+private struct ParsedMP4Metadata: Sendable {
+    var textValuesByType: [MP4AtomType: [String]] = [:]
+    var integerValuesByType: [MP4AtomType: [Int]] = [:]
+    var hasArtwork = false
 }
 
 private struct MP4AtomType: Hashable, Sendable {

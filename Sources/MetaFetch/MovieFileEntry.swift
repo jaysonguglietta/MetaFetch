@@ -30,6 +30,7 @@ final class MovieFileEntry: ObservableObject, Identifiable {
     @Published var errorMessage: String?
     @Published var statusMessage: String
     @Published var lastSavedAt: Date?
+    var searchGeneration = 0
 
     init(fileURL: URL, mediaMode: MediaLibraryMode) {
         self.fileURL = fileURL

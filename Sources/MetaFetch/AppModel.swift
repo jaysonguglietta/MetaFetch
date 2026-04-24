@@ -226,8 +226,11 @@ final class AppModel: ObservableObject {
     func search(file: MovieFileEntry) async {
         let query = file.queryText.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsedQuery = FilenameTitleParser.parsedManualQuery(query, mode: file.mediaMode)
+        file.searchGeneration += 1
+        let searchGeneration = file.searchGeneration
 
         guard !parsedQuery.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            file.isSearching = false
             file.errorMessage = file.mediaMode.emptyQueryError
             file.statusMessage = "Waiting for a title"
             return
@@ -239,6 +242,17 @@ final class AppModel: ObservableObject {
 
         do {
             let results = try await searchService.search(matching: query, mode: file.mediaMode)
+            guard file.searchGeneration == searchGeneration else {
+                return
+            }
+
+            guard file.queryText.trimmingCharacters(in: .whitespacesAndNewlines) == query else {
+                file.isSearching = false
+                file.statusMessage = "Search text changed"
+                file.errorMessage = "Run search again to use the updated title."
+                return
+            }
+
             let previousSelectionID = file.selectedResult?.id
             let preservedSelection: MediaSearchResult?
             file.searchResults = results
@@ -279,6 +293,10 @@ final class AppModel: ObservableObject {
 
             await ArtworkPipeline.shared.prefetch(urls: Array(artworkURLs))
         } catch {
+            guard file.searchGeneration == searchGeneration else {
+                return
+            }
+
             file.isSearching = false
             file.statusMessage = "Search failed"
             file.errorMessage = error.localizedDescription

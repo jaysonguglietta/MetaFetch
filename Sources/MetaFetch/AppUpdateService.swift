@@ -56,6 +56,7 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
         case noInstallableAsset
         case assetTooLarge(Int)
         case downloadsFolderUnavailable
+        case downloadedAssetInvalid
         case moveFailed
 
         var errorDescription: String? {
@@ -74,6 +75,8 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
                 return "The update download is larger than MetaFetch allows right now (\(size) bytes)."
             case .downloadsFolderUnavailable:
                 return "MetaFetch could not find your Downloads folder."
+            case .downloadedAssetInvalid:
+                return "MetaFetch downloaded the update, but the file did not pass safety checks."
             case .moveFailed:
                 return "MetaFetch downloaded the update but could not move it to Downloads."
             }
@@ -94,12 +97,11 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
         request.setValue("MetaFetch", forHTTPHeaderField: "User-Agent")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await Self.boundedData(
+            for: request,
+            maximumBytes: maximumReleaseResponseBytes
+        )
         try validate(response: response)
-
-        guard data.count <= maximumReleaseResponseBytes else {
-            throw UpdateError.responseTooLarge
-        }
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -129,9 +131,7 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
             throw UpdateError.noInstallableAsset
         }
 
-        guard asset.downloadURL.scheme == "https",
-              let host = asset.downloadURL.host?.lowercased(),
-              host == "github.com" || host.hasSuffix(".github.com") else {
+        guard Self.isTrustedReleaseURL(asset.downloadURL) else {
             throw UpdateError.invalidDownloadURL
         }
 
@@ -144,7 +144,19 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
         request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
 
         let (temporaryURL, response) = try await URLSession.shared.download(for: request)
+        var shouldRemoveTemporaryFile = true
+        defer {
+            if shouldRemoveTemporaryFile {
+                try? FileManager.default.removeItem(at: temporaryURL)
+            }
+        }
+
         try validate(response: response)
+        try validateDownloadedAsset(
+            at: temporaryURL,
+            response: response,
+            declaredSize: asset.size
+        )
 
         let downloadsURL = try downloadsFolder()
         let destinationURL = uniqueDestinationURL(
@@ -154,6 +166,7 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
 
         do {
             try FileManager.default.moveItem(at: temporaryURL, to: destinationURL)
+            shouldRemoveTemporaryFile = false
         } catch {
             throw UpdateError.moveFailed
         }
@@ -168,6 +181,40 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
 
         guard (200..<300).contains(httpResponse.statusCode) else {
             throw UpdateError.serverResponse(httpResponse.statusCode)
+        }
+    }
+
+    private func validateDownloadedAsset(
+        at fileURL: URL,
+        response: URLResponse,
+        declaredSize: Int
+    ) throws {
+        if let finalURL = response.url,
+           !Self.isTrustedDownloadResponseURL(finalURL) {
+            throw UpdateError.invalidDownloadURL
+        }
+
+        if response.expectedContentLength > maximumDownloadBytes {
+            throw UpdateError.assetTooLarge(Int(response.expectedContentLength))
+        }
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        guard let fileSize = attributes[.size] as? NSNumber else {
+            throw UpdateError.downloadedAssetInvalid
+        }
+
+        let actualSize = fileSize.uint64Value
+        guard actualSize > 0 else {
+            throw UpdateError.downloadedAssetInvalid
+        }
+
+        guard actualSize <= UInt64(maximumDownloadBytes) else {
+            throw UpdateError.assetTooLarge(Int(min(actualSize, UInt64(Int.max))))
+        }
+
+        if declaredSize > 0,
+           actualSize > UInt64(declaredSize) {
+            throw UpdateError.assetTooLarge(Int(min(actualSize, UInt64(Int.max))))
         }
     }
 
@@ -233,6 +280,52 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingPrefix("v")
             .trimmingPrefix("V")
+    }
+
+    private static func boundedData(
+        for request: URLRequest,
+        maximumBytes: Int
+    ) async throws -> (Data, URLResponse) {
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+
+        if response.expectedContentLength > maximumBytes {
+            throw UpdateError.responseTooLarge
+        }
+
+        var data = Data()
+        if response.expectedContentLength > 0 {
+            data.reserveCapacity(min(Int(response.expectedContentLength), maximumBytes))
+        }
+
+        for try await byte in bytes {
+            data.append(byte)
+            if data.count > maximumBytes {
+                throw UpdateError.responseTooLarge
+            }
+        }
+
+        return (data, response)
+    }
+
+    private static func isTrustedReleaseURL(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https",
+              let host = url.host?.lowercased() else {
+            return false
+        }
+
+        return host == "github.com" || host.hasSuffix(".github.com")
+    }
+
+    private static func isTrustedDownloadResponseURL(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https",
+              let host = url.host?.lowercased() else {
+            return false
+        }
+
+        return host == "github.com" ||
+            host.hasSuffix(".github.com") ||
+            host == "githubusercontent.com" ||
+            host.hasSuffix(".githubusercontent.com")
     }
 
     private static func isRemoteVersion(_ remoteVersion: String, newerThan currentVersion: String) -> Bool {
