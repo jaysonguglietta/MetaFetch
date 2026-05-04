@@ -132,7 +132,7 @@ final class AppModel: ObservableObject {
     }
 
     var currentAppVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1"
     }
 
     func chooseMode(_ mode: MediaLibraryMode) {
@@ -170,21 +170,26 @@ final class AppModel: ObservableObject {
             return
         }
 
-        let validURLs = urls
-            .compactMap(MediaFileImportValidator.validatedImportURL)
+        let validFiles = urls
+            .compactMap(MediaFileImportValidator.validatedImport)
 
-        guard !validURLs.isEmpty else {
+        guard !validFiles.isEmpty else {
             noticeMessage = "Only local, writable `.mp4` files are accepted right now."
             return
         }
 
         var knownPaths = Set(files.map { $0.fileURL.standardizedFileURL.path })
-        let newEntries = validURLs.compactMap { url -> MovieFileEntry? in
+        let newEntries = validFiles.compactMap { validatedFile -> MovieFileEntry? in
+            let url = validatedFile.url
             guard knownPaths.insert(url.path).inserted else {
                 return nil
             }
 
-            return MovieFileEntry(fileURL: url, mediaMode: selectedMode)
+            return MovieFileEntry(
+                fileURL: url,
+                mediaMode: selectedMode,
+                importIdentity: validatedFile.identity
+            )
         }
 
         guard !newEntries.isEmpty else {
@@ -316,6 +321,17 @@ final class AppModel: ObservableObject {
             return false
         }
 
+        do {
+            try MediaFileImportValidator.validateStillSafeToWrite(
+                file.fileURL,
+                expectedIdentity: file.importIdentity
+            )
+        } catch {
+            file.errorMessage = error.localizedDescription
+            file.statusMessage = "Save stopped before writing"
+            return false
+        }
+
         let includeArtwork = file.willSaveArtwork
         let resultForWriting = selectedResult.replacingArtworkURL(file.selectedArtworkURL)
         let fileID = file.id
@@ -346,6 +362,7 @@ final class AppModel: ObservableObject {
             )
             file.saveProgress = 1
             file.lastSavedAt = Date()
+            file.importIdentity = MediaFileImportValidator.identity(for: file.fileURL)
             file.isSaving = false
             file.saveProgress = nil
             file.statusMessage = "Verified MP4 tags at \(file.lastSavedAt?.formatted(date: .omitted, time: .shortened) ?? "just now")"
@@ -569,7 +586,7 @@ final class AppModel: ObservableObject {
         do {
             let fileURL = try await updateService.download(update: update)
             updateState = .downloaded(update, fileURL: fileURL)
-            openDownloadedUpdate(at: fileURL)
+            revealDownloadedUpdate(at: fileURL)
         } catch {
             updateState = .failed(error.localizedDescription)
         }
@@ -579,8 +596,8 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.open(update.releaseURL)
     }
 
-    func openDownloadedUpdate(at fileURL: URL) {
-        NSWorkspace.shared.open(fileURL)
+    func revealDownloadedUpdate(at fileURL: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([fileURL])
     }
 
     private func suggestedAutoSelection(
@@ -663,8 +680,36 @@ final class AppModel: ObservableObject {
     }
 }
 
+struct ValidatedMediaFile: Sendable {
+    let url: URL
+    let identity: MediaFileIdentity?
+}
+
+struct MediaFileIdentity: Equatable, Sendable {
+    let systemNumber: UInt64
+    let fileNumber: UInt64
+}
+
 enum MediaFileImportValidator {
+    enum ValidationError: LocalizedError {
+        case unsafeFile
+        case fileChanged
+
+        var errorDescription: String? {
+            switch self {
+            case .unsafeFile:
+                return "MetaFetch stopped before saving because the file is no longer a local, writable `.mp4` file."
+            case .fileChanged:
+                return "MetaFetch stopped before saving because this file changed after it was imported. Remove it and add it again before tagging."
+            }
+        }
+    }
+
     static func validatedImportURL(_ url: URL) -> URL? {
+        validatedImport(url)?.url
+    }
+
+    static func validatedImport(_ url: URL) -> ValidatedMediaFile? {
         let standardizedURL = url.standardizedFileURL
         guard standardizedURL.isFileURL,
               standardizedURL.pathExtension.caseInsensitiveCompare("mp4") == .orderedSame,
@@ -681,6 +726,57 @@ enum MediaFileImportValidator {
             return nil
         }
 
-        return standardizedURL
+        return ValidatedMediaFile(
+            url: standardizedURL,
+            identity: identity(for: standardizedURL)
+        )
+    }
+
+    static func validateStillSafeToWrite(
+        _ url: URL,
+        expectedIdentity: MediaFileIdentity?
+    ) throws {
+        guard let validatedFile = validatedImport(url) else {
+            throw ValidationError.unsafeFile
+        }
+
+        if let expectedIdentity,
+           let currentIdentity = validatedFile.identity,
+           currentIdentity != expectedIdentity {
+            throw ValidationError.fileChanged
+        }
+    }
+
+    static func identity(for url: URL) -> MediaFileIdentity? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.standardizedFileURL.path),
+              let systemNumber = unsignedIntegerAttribute(attributes[.systemNumber]),
+              let fileNumber = unsignedIntegerAttribute(attributes[.systemFileNumber]) else {
+            return nil
+        }
+
+        return MediaFileIdentity(
+            systemNumber: systemNumber,
+            fileNumber: fileNumber
+        )
+    }
+
+    private static func unsignedIntegerAttribute(_ value: Any?) -> UInt64? {
+        if let number = value as? NSNumber {
+            return number.uint64Value
+        }
+
+        if let value = value as? UInt64 {
+            return value
+        }
+
+        if let value = value as? UInt {
+            return UInt64(value)
+        }
+
+        if let value = value as? Int, value >= 0 {
+            return UInt64(value)
+        }
+
+        return nil
     }
 }

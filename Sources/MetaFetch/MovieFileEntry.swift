@@ -5,6 +5,7 @@ final class MovieFileEntry: ObservableObject, Identifiable {
     let id = UUID()
     let fileURL: URL
     let mediaMode: MediaLibraryMode
+    var importIdentity: MediaFileIdentity?
 
     @Published var queryText: String {
         didSet {
@@ -32,9 +33,14 @@ final class MovieFileEntry: ObservableObject, Identifiable {
     @Published var lastSavedAt: Date?
     var searchGeneration = 0
 
-    init(fileURL: URL, mediaMode: MediaLibraryMode) {
+    init(
+        fileURL: URL,
+        mediaMode: MediaLibraryMode,
+        importIdentity: MediaFileIdentity? = nil
+    ) {
         self.fileURL = fileURL
         self.mediaMode = mediaMode
+        self.importIdentity = importIdentity
         self.queryText = FilenameTitleParser.suggestedQuery(
             fromFileURL: fileURL,
             mode: mediaMode

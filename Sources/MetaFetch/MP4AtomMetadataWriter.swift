@@ -5,6 +5,9 @@ struct MP4AtomMetadataWriter: Sendable {
         case missingMovieAtom
         case invalidAtomLayout
         case atomTooLarge
+        case movieAtomTooLarge(UInt64)
+        case atomNestingTooDeep
+        case atomCountTooHigh
         case chunkOffsetOverflow
         case fileReadFailed
 
@@ -16,6 +19,12 @@ struct MP4AtomMetadataWriter: Sendable {
                 return "MetaFetch could not safely update this MP4 atom layout."
             case .atomTooLarge:
                 return "The generated MP4 metadata atom is too large."
+            case .movieAtomTooLarge:
+                return "The MP4 movie header is too large for MetaFetch to safely edit."
+            case .atomNestingTooDeep:
+                return "The MP4 atom layout is nested too deeply for MetaFetch to safely edit."
+            case .atomCountTooHigh:
+                return "The MP4 atom layout has too many entries for MetaFetch to safely edit."
             case .chunkOffsetOverflow:
                 return "The MP4 uses 32-bit chunk offsets that cannot be adjusted safely."
             case .fileReadFailed:
@@ -23,6 +32,10 @@ struct MP4AtomMetadataWriter: Sendable {
             }
         }
     }
+
+    private static let maximumMovieAtomBytes: UInt64 = 128 * 1024 * 1024
+    private static let maximumAtomNestingDepth = 32
+    private static let maximumAtomsPerParse = 100_000
 
     func writeMetadata(
         to fileURL: URL,
@@ -53,11 +66,7 @@ struct MP4AtomMetadataWriter: Sendable {
         let reservedEnd = followingFreeBox?.end ?? movieBox.end
         let oldReservedSize = reservedEnd - movieBox.start
 
-        try handle.seek(toOffset: movieBox.start)
-        let movieAtomData = handle.readData(ofLength: Int(movieBox.size))
-        guard UInt64(movieAtomData.count) == movieBox.size else {
-            throw AtomWriterError.fileReadFailed
-        }
+        let movieAtomData = try readMovieAtomData(from: handle, movieBox: movieBox)
         try handle.close()
 
         var updatedMovieAtom = try updatedMovieAtom(
@@ -128,11 +137,7 @@ struct MP4AtomMetadataWriter: Sendable {
             return false
         }
 
-        try handle.seek(toOffset: movieBox.start)
-        let movieAtomData = handle.readData(ofLength: Int(movieBox.size))
-        guard UInt64(movieAtomData.count) == movieBox.size else {
-            return false
-        }
+        let movieAtomData = try readMovieAtomData(from: handle, movieBox: movieBox)
 
         let metadata = try readMetadata(from: movieAtomData)
         guard expectedTextRequirements(for: result).allSatisfy({ requirement in
@@ -158,6 +163,24 @@ struct MP4AtomMetadataWriter: Sendable {
         }
 
         return true
+    }
+
+    private func readMovieAtomData(
+        from handle: FileHandle,
+        movieBox: MP4FileAtom
+    ) throws -> Data {
+        guard movieBox.size <= Self.maximumMovieAtomBytes,
+              movieBox.size <= UInt64(Int.max) else {
+            throw AtomWriterError.movieAtomTooLarge(movieBox.size)
+        }
+
+        try handle.seek(toOffset: movieBox.start)
+        let movieAtomData = handle.readData(ofLength: Int(movieBox.size))
+        guard UInt64(movieAtomData.count) == movieBox.size else {
+            throw AtomWriterError.fileReadFailed
+        }
+
+        return movieAtomData
     }
 
     private func writeInPlaceIfPossible(
@@ -687,8 +710,12 @@ struct MP4AtomMetadataWriter: Sendable {
             }
 
             guard size >= headerSize,
-                  offset + size <= fileSize else {
+                  size <= fileSize - offset else {
                 throw AtomWriterError.invalidAtomLayout
+            }
+
+            guard atoms.count < Self.maximumAtomsPerParse else {
+                throw AtomWriterError.atomCountTooHigh
             }
 
             atoms.append(MP4FileAtom(
@@ -705,6 +732,25 @@ struct MP4AtomMetadataWriter: Sendable {
     }
 
     private func parseAtoms(in data: Data, range: Range<Int>) throws -> [MP4MemoryAtom] {
+        var remainingAtomBudget = Self.maximumAtomsPerParse
+        return try parseAtoms(
+            in: data,
+            range: range,
+            depth: 0,
+            remainingAtomBudget: &remainingAtomBudget
+        )
+    }
+
+    private func parseAtoms(
+        in data: Data,
+        range: Range<Int>,
+        depth: Int,
+        remainingAtomBudget: inout Int
+    ) throws -> [MP4MemoryAtom] {
+        guard depth <= Self.maximumAtomNestingDepth else {
+            throw AtomWriterError.atomNestingTooDeep
+        }
+
         var atoms: [MP4MemoryAtom] = []
         var offset = range.lowerBound
 
@@ -738,6 +784,11 @@ struct MP4AtomMetadataWriter: Sendable {
                   size <= UInt64(remaining) else {
                 throw AtomWriterError.invalidAtomLayout
             }
+
+            guard remainingAtomBudget > 0 else {
+                throw AtomWriterError.atomCountTooHigh
+            }
+            remainingAtomBudget -= 1
 
             let end = offset + Int(size)
             atoms.append(MP4MemoryAtom(
@@ -784,7 +835,13 @@ struct MP4AtomMetadataWriter: Sendable {
         oldReservedEnd: UInt64,
         delta: Int64
     ) throws {
-        let root = try parseAtoms(in: movieAtomData, range: 0..<movieAtomData.count)
+        var remainingAtomBudget = Self.maximumAtomsPerParse
+        let root = try parseAtoms(
+            in: movieAtomData,
+            range: 0..<movieAtomData.count,
+            depth: 0,
+            remainingAtomBudget: &remainingAtomBudget
+        )
         guard let movieAtom = root.first,
               movieAtom.type == .moov else {
             throw AtomWriterError.invalidAtomLayout
@@ -794,7 +851,9 @@ struct MP4AtomMetadataWriter: Sendable {
             in: &movieAtomData,
             atom: movieAtom,
             oldReservedEnd: oldReservedEnd,
-            delta: delta
+            delta: delta,
+            depth: 1,
+            remainingAtomBudget: &remainingAtomBudget
         )
     }
 
@@ -802,8 +861,14 @@ struct MP4AtomMetadataWriter: Sendable {
         in data: inout Data,
         atom: MP4MemoryAtom,
         oldReservedEnd: UInt64,
-        delta: Int64
+        delta: Int64,
+        depth: Int,
+        remainingAtomBudget: inout Int
     ) throws {
+        guard depth <= Self.maximumAtomNestingDepth else {
+            throw AtomWriterError.atomNestingTooDeep
+        }
+
         if atom.type == .stco {
             try adjustStco(in: &data, atom: atom, oldReservedEnd: oldReservedEnd, delta: delta)
             return
@@ -828,13 +893,20 @@ struct MP4AtomMetadataWriter: Sendable {
             childRange = atom.payloadRange
         }
 
-        let children = try parseAtoms(in: data, range: childRange)
+        let children = try parseAtoms(
+            in: data,
+            range: childRange,
+            depth: depth,
+            remainingAtomBudget: &remainingAtomBudget
+        )
         for child in children {
             try adjustChunkOffsets(
                 in: &data,
                 atom: child,
                 oldReservedEnd: oldReservedEnd,
-                delta: delta
+                delta: delta,
+                depth: depth + 1,
+                remainingAtomBudget: &remainingAtomBudget
             )
         }
     }

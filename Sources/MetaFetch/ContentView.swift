@@ -2214,8 +2214,8 @@ private struct HelpView: View {
                         rows: [
                             "Use Updates in the toolbar or Check for Updates from the app menu to look for newer GitHub releases.",
                             "MetaFetch compares the installed app version with the latest GitHub release tag.",
-                            "When a release has a DMG, ZIP, or PKG asset, MetaFetch can download it to Downloads and open it.",
-                            "Installer replacement still stays visible and user-confirmed, which is safer than silently replacing a running app.",
+                            "When a release has a DMG, ZIP, or PKG asset, MetaFetch can download it to Downloads and reveal it in Finder.",
+                            "Installer replacement still stays visible and user-confirmed, and MetaFetch no longer opens downloaded installers automatically.",
                         ]
                     )
 
@@ -2227,6 +2227,7 @@ private struct HelpView: View {
                             "Series Only in TV mode means MetaFetch found the show but still needs a specific episode code.",
                             "For multi-episode tagging, search the show once in the batch workspace, click the right show card, review the badges, then Save All Tagged + Posters.",
                             "If saving is slow, turn off poster artwork so MetaFetch can try the metadata-only fast path.",
+                            "If MetaFetch says a file changed after import, remove that row and add the MP4 again before saving.",
                             "If the layout feels cramped, hide the sidebar or widen the app window before reviewing poster cards.",
                         ]
                     )
@@ -2313,7 +2314,7 @@ private struct UpdateView: View {
                     Spacer()
 
                     if case .available(let update) = model.updateState {
-                        Button(update.asset == nil ? "Open Release Page" : "Download And Open") {
+                        Button(update.asset == nil ? "Open Release Page" : "Download And Reveal") {
                             if update.asset == nil {
                                 model.openReleasePage(for: update)
                             } else {
@@ -2326,8 +2327,8 @@ private struct UpdateView: View {
                     }
 
                     if case .downloaded(_, let fileURL) = model.updateState {
-                        Button("Open Download") {
-                            model.openDownloadedUpdate(at: fileURL)
+                        Button("Reveal Download") {
+                            model.revealDownloadedUpdate(at: fileURL)
                         }
                         .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.lime))
                     }
@@ -2372,7 +2373,7 @@ private struct UpdateView: View {
                     title: "Version \(update.version) Is Ready",
                     message: update.asset == nil
                         ? "GitHub has a newer release, but it does not include a .dmg, .zip, or .pkg asset. Open the release page to download it manually."
-                        : "MetaFetch can download \(update.asset?.name ?? "the installer") to your Downloads folder and open it."
+                        : "MetaFetch can download \(update.asset?.name ?? "the installer") to your Downloads folder and reveal it in Finder."
                 )
 
                 releaseNotes(for: update)
@@ -2382,7 +2383,7 @@ private struct UpdateView: View {
                 updateMessage(
                     eyebrow: "Downloading",
                     title: "Fetching Version \(update.version)",
-                    message: "The update is downloading from GitHub. MetaFetch will open it when the download finishes."
+                    message: "The update is downloading from GitHub. MetaFetch will reveal it in Finder when the download finishes."
                 )
 
                 ProgressView()
@@ -2393,7 +2394,7 @@ private struct UpdateView: View {
                 updateMessage(
                     eyebrow: "Downloaded",
                     title: "Version \(update.version) Is In Downloads",
-                    message: "The installer was downloaded and opened. If macOS did not bring it forward, open it again from: \(fileURL.path)"
+                    message: "The installer was downloaded and selected in Finder. Open it only after you trust the release: \(fileURL.path)"
                 )
 
                 releaseNotes(for: update)

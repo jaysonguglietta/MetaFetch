@@ -379,7 +379,7 @@ private struct WikimediaMovieSearchService {
         var request = URLRequest(url: url)
         request.timeoutInterval = BoundedJSONRequest.timeoutInterval
         request.setValue(
-            "MetaFetch/1.0 (macOS app for tagging MP4 movie files and TV episodes)",
+            "MetaFetch/1.1 (macOS app for tagging MP4 movie files and TV episodes)",
             forHTTPHeaderField: "User-Agent"
         )
 
@@ -830,7 +830,7 @@ private struct TVMazeSearchService {
         var request = URLRequest(url: url)
         request.timeoutInterval = BoundedJSONRequest.timeoutInterval
         request.setValue(
-            "MetaFetch/1.0 (macOS app for tagging MP4 movie files and TV episodes)",
+            "MetaFetch/1.1 (macOS app for tagging MP4 movie files and TV episodes)",
             forHTTPHeaderField: "User-Agent"
         )
 
@@ -854,7 +854,7 @@ private struct TVMazeSearchService {
         var request = URLRequest(url: url)
         request.timeoutInterval = BoundedJSONRequest.timeoutInterval
         request.setValue(
-            "MetaFetch/1.0 (macOS app for tagging MP4 movie files and TV episodes)",
+            "MetaFetch/1.1 (macOS app for tagging MP4 movie files and TV episodes)",
             forHTTPHeaderField: "User-Agent"
         )
 

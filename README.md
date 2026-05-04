@@ -15,7 +15,8 @@ MetaFetch is a native macOS SwiftUI app for tagging `.mp4` files with movie or T
 - Use a native MP4 atom writer first, then fall back to AVFoundation only when the file layout requires it.
 - Verify saved metadata by reading the MP4 back after writing, then fall back if a fast save does not stick.
 - Prioritize speed by writing without creating sidecar safety backups.
-- Check GitHub Releases for newer versions, download an installer asset, and open it for user-confirmed installation.
+- Check GitHub Releases for newer versions, download an installer asset, and reveal it in Finder for user-confirmed installation.
+- Re-check imported file identity before saving so MetaFetch refuses to tag a path that changed after import.
 
 ## Run
 
@@ -43,6 +44,15 @@ Run the test suite:
 swift test
 ```
 
+If your shell cannot find the Apple test frameworks directly, run with the same Xcode cache environment used by CI:
+
+```bash
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+CLANG_MODULE_CACHE_PATH=/tmp/metafetch-clang-cache \
+SWIFTPM_MODULECACHE_OVERRIDE=/tmp/metafetch-swiftpm-cache \
+swift test
+```
+
 Build the local app bundle:
 
 ```bash
@@ -52,8 +62,24 @@ Build the local app bundle:
 Build with release version metadata:
 
 ```bash
-APP_VERSION=1.1 APP_BUILD=2 ./Scripts/build_app.sh
+APP_VERSION=1.2 APP_BUILD=3 ./Scripts/build_app.sh
 ```
+
+The local build script now ad-hoc signs the app with hardened runtime by default. For release builds, provide a Developer ID Application identity:
+
+```bash
+APP_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ./Scripts/build_app.sh
+```
+
+Build a GitHub-release-ready DMG with checksum output:
+
+```bash
+APP_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+APP_NOTARY_PROFILE="metafetch-notary" \
+./Scripts/build_release_dmg.sh
+```
+
+`APP_NOTARY_PROFILE` should be an `xcrun notarytool` keychain profile. Omit it for local unsigned/not-notarized test DMGs.
 
 ## Updates
 
@@ -65,7 +91,18 @@ For in-app downloads, attach one installable asset to the GitHub release:
 - `.zip`
 - `.pkg`
 
-MetaFetch downloads the asset to the user’s Downloads folder and opens it. The final app replacement remains visible and user-confirmed instead of silently replacing a running app.
+MetaFetch downloads the asset to the user’s Downloads folder and reveals it in Finder. It does not auto-open downloaded installers, so the final app replacement remains visible and user-confirmed instead of silently replacing a running app.
+
+For production releases, sign and notarize installer assets before attaching them to GitHub. `Scripts/build_release_dmg.sh` creates a DMG and SHA-256 file for that workflow. The in-app updater intentionally treats GitHub release downloads as manual installs rather than silently trusted code.
+
+## Security Hardening
+
+- Imported files must be local, writable, regular `.mp4` files and cannot be symlinks.
+- MetaFetch stores file identity at import and re-checks it immediately before saving.
+- The native MP4 atom writer rejects oversized movie headers and overly complex atom layouts before allocating or recursing deeply.
+- Artwork downloads are size-bounded, MIME-checked, downsampled, cached with eviction, and rejected when redirects leave the artwork host allowlist.
+- Update downloads are size-bounded and revealed in Finder instead of opened automatically.
+- CI runs the test suite, builds the app bundle, and verifies the generated signature.
 
 ## Data Sources
 

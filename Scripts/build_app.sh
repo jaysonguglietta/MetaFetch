@@ -5,8 +5,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="MetaFetch"
 ICON_NAME="metafetch-app-icon"
-APP_VERSION="${APP_VERSION:-1.0}"
-APP_BUILD="${APP_BUILD:-1}"
+APP_VERSION="${APP_VERSION:-1.1}"
+APP_BUILD="${APP_BUILD:-2}"
+APP_SIGN_IDENTITY="${APP_SIGN_IDENTITY:--}"
 BUILD_DIR="$ROOT_DIR/.build"
 APP_DIR="$ROOT_DIR/dist/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
@@ -69,5 +70,17 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+if command -v codesign >/dev/null 2>&1; then
+  if [ "$APP_SIGN_IDENTITY" = "-" ]; then
+    codesign --force --deep --options runtime --sign - "$APP_DIR" >/dev/null
+    echo "Ad-hoc signed app bundle with hardened runtime."
+  else
+    codesign --force --deep --timestamp --options runtime --sign "$APP_SIGN_IDENTITY" "$APP_DIR" >/dev/null
+    echo "Signed app bundle with identity: $APP_SIGN_IDENTITY"
+  fi
+else
+  echo "Warning: codesign was not found; app bundle is unsigned."
+fi
 
 echo "Built app bundle at: $APP_DIR"

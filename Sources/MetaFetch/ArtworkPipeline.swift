@@ -112,6 +112,11 @@ actor ArtworkPipeline {
             return Data()
         }
 
+        if let finalURL = httpResponse.url,
+           !isAllowedArtworkURL(finalURL) {
+            return Data()
+        }
+
         if httpResponse.expectedContentLength > maximumArtworkBytes {
             return Data()
         }

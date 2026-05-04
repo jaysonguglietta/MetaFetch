@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test-and-build:
+    name: Test and Build
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show Swift toolchain
+        run: swift --version
+
+      - name: Run tests
+        run: |
+          DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+          CLANG_MODULE_CACHE_PATH=/tmp/metafetch-clang-cache \
+          SWIFTPM_MODULECACHE_OVERRIDE=/tmp/metafetch-swiftpm-cache \
+          swift test
+
+      - name: Build app bundle
+        run: ./Scripts/build_app.sh
+
+      - name: Verify app signature
+        run: codesign --verify --deep --strict dist/MetaFetch.app
+
+      - name: Check release DMG script syntax
+        run: zsh -n Scripts/build_release_dmg.sh

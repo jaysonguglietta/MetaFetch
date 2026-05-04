@@ -94,7 +94,7 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
         }
 
         var request = URLRequest(url: url, timeoutInterval: 15)
-        request.setValue("MetaFetch", forHTTPHeaderField: "User-Agent")
+        request.setValue("MetaFetch/1.1", forHTTPHeaderField: "User-Agent")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
 
         let (data, response) = try await Self.boundedData(
@@ -135,12 +135,13 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
             throw UpdateError.invalidDownloadURL
         }
 
-        guard asset.size <= maximumDownloadBytes else {
+        guard asset.size > 0,
+              asset.size <= maximumDownloadBytes else {
             throw UpdateError.assetTooLarge(asset.size)
         }
 
         var request = URLRequest(url: asset.downloadURL, timeoutInterval: 120)
-        request.setValue("MetaFetch", forHTTPHeaderField: "User-Agent")
+        request.setValue("MetaFetch/1.1", forHTTPHeaderField: "User-Agent")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
 
         let (temporaryURL, response) = try await URLSession.shared.download(for: request)
@@ -161,7 +162,7 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
         let downloadsURL = try downloadsFolder()
         let destinationURL = uniqueDestinationURL(
             directory: downloadsURL,
-            fileName: "MetaFetch-\(update.version)-\(asset.name)"
+            fileName: "MetaFetch-\(update.version)-\(Self.safeAssetFileName(asset.name))"
         )
 
         do {
@@ -337,6 +338,21 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
         }
 
         return remoteVersion.caseInsensitiveCompare(normalizedCurrentVersion) != .orderedSame
+    }
+
+    private static func safeAssetFileName(_ rawName: String) -> String {
+        let lastPathComponent = URL(fileURLWithPath: rawName).lastPathComponent
+        let allowedCharacters = CharacterSet.alphanumerics
+            .union(CharacterSet(charactersIn: ".-_ "))
+
+        let sanitizedScalars = lastPathComponent.unicodeScalars.map { scalar in
+            allowedCharacters.contains(scalar) ? Character(scalar) : "-"
+        }
+
+        let sanitizedName = String(sanitizedScalars)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return sanitizedName.isEmpty ? "MetaFetch-update.dmg" : sanitizedName
     }
 }
 

@@ -6,6 +6,8 @@ For speed, MetaFetch does not create a sidecar safety backup before saving. Meta
 
 After every save, MetaFetch reads the MP4 back and verifies that core tags such as title and show name actually persisted. If a metadata-only fast save reports success but the tags are not readable afterward, MetaFetch falls back to a full container rewrite instead of silently leaving the file untagged.
 
+MetaFetch also remembers the file identity when you import a file. If that path becomes a symlink, stops being a writable local MP4, or points to a different file before saving, MetaFetch stops before writing and asks you to remove and re-add the file.
+
 ## Choose A Deck
 
 When MetaFetch opens, choose one mode:
@@ -123,7 +125,7 @@ Use `Updates` in the toolbar or `Check for Updates...` from the app menu to ask 
 
 MetaFetch compares the installed app version with the latest release tag in `jaysonguglietta/MetaFetch`. Tags like `v1.1` and `1.1` are both understood as version `1.1`.
 
-If the newer release includes a `.dmg`, `.zip`, or `.pkg` asset, MetaFetch can download it to your Downloads folder and open it. The final install remains visible and user-confirmed so macOS does not silently replace the app while it is running.
+If the newer release includes a `.dmg`, `.zip`, or `.pkg` asset, MetaFetch can download it to your Downloads folder and reveal it in Finder. It does not open downloaded installers automatically. Open the downloaded file only after you trust the GitHub release.
 
 If the update checker says a release has no installable asset, open the release page and download the app manually.
 
@@ -140,6 +142,7 @@ If the update checker says a release has no installable asset, open the release 
 - If the sidebar is hidden, use `Hide Sidebar` / `Show Sidebar` in the toolbar.
 - If saving is slow, the MP4 may not have enough metadata headroom for a poster and may need a container rebuild.
 - If a newly converted MP4 never accepts tags quickly, rebuild it with MP4 metadata headroom such as `-moov_size 16777216`.
+- If MetaFetch says the file changed after import, remove that row and add the MP4 again. This protects against tagging the wrong filesystem object.
 - If update checking fails, confirm you can reach GitHub and that the latest release includes a `.dmg`, `.zip`, or `.pkg` asset.
 - If the app feels stuck on a bad batch, use `Start Over` to clear the queue and choose a mode again.
 - If you see old `.metafetch-backup-*` files, they came from an earlier MetaFetch build and are no longer created by the current speed-first save path.

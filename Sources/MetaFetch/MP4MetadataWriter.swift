@@ -52,6 +52,11 @@ struct MP4MetadataWriter: MetadataWriting {
         includeArtwork: Bool,
         progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)? = nil
     ) async throws {
+        try MediaFileImportValidator.validateStillSafeToWrite(
+            fileURL,
+            expectedIdentity: nil
+        )
+
         let artworkData = includeArtwork
             ? try await ArtworkPipeline.shared.preparedArtwork(for: result.artworkURL)
             : nil
