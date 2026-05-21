@@ -213,6 +213,29 @@ final class MetaFetchTests: XCTestCase {
     }
 
     @MainActor
+    func testImportFilesReportsMixedDuplicateAndUnsupportedDrops() async throws {
+        let directory = try makeTemporaryDirectory(prefix: "MetaFetchMixedImportTests")
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let firstMP4 = directory.appendingPathComponent("First.Movie.mp4")
+        let secondMP4 = directory.appendingPathComponent("Second.Movie.mp4")
+        let unsupportedFile = directory.appendingPathComponent("Poster.jpg")
+        FileManager.default.createFile(atPath: firstMP4.path, contents: Data([0x00]))
+        FileManager.default.createFile(atPath: secondMP4.path, contents: Data([0x00]))
+        FileManager.default.createFile(atPath: unsupportedFile.path, contents: Data([0x00]))
+
+        let model = AppModel(searchService: StubSearchService(results: []))
+        model.chooseMode(.movie)
+        model.importFiles(from: [firstMP4])
+        model.importFiles(from: [firstMP4, secondMP4, unsupportedFile])
+
+        XCTAssertEqual(model.files.count, 2)
+        XCTAssertEqual(model.noticeMessage, "Added 1 MP4 file, skipped 1 duplicate, skipped 1 unsupported file.")
+    }
+
+    @MainActor
     func testSaveStopsIfImportedFileIsSwappedBeforeWriting() async throws {
         let directory = try makeTemporaryDirectory(prefix: "MetaFetchRaceTests")
         defer {
@@ -271,7 +294,7 @@ final class MetaFetchTests: XCTestCase {
             episodeNumber: 3
         )
 
-        try await MP4AtomMetadataWriter().writeMetadata(
+        _ = try await MP4AtomMetadataWriter().writeMetadata(
             to: fileURL,
             using: result,
             artworkData: nil
@@ -302,7 +325,7 @@ final class MetaFetchTests: XCTestCase {
         try writeOversizedMovieAtomFile(at: fileURL)
 
         do {
-            try await MP4AtomMetadataWriter().writeMetadata(
+            _ = try await MP4AtomMetadataWriter().writeMetadata(
                 to: fileURL,
                 using: makeEpisodeResult(id: 303, title: "Episode Three", episodeNumber: 3),
                 artworkData: nil
@@ -397,6 +420,252 @@ final class MetaFetchTests: XCTestCase {
         ])
         XCTAssertTrue(model.files.allSatisfy { $0.lastSavedAt != nil })
         XCTAssertEqual(model.batchStatusMessage, "Verified metadata and available poster artwork on 2 episodes.")
+        XCTAssertEqual(model.lastSaveReport?.successCount, 2)
+        XCTAssertEqual(model.lastSaveReport?.entries.map(\.pathLabel), [
+            "Fast metadata-only",
+            "Fast metadata-only",
+        ])
+    }
+
+    @MainActor
+    func testManualMetadataDraftIsWrittenInsteadOfOriginalResult() async throws {
+        let directory = try makeTemporaryDirectory(prefix: "MetaFetchManualMetadataTests")
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let movieFile = directory.appendingPathComponent("Original.Title.mp4")
+        FileManager.default.createFile(atPath: movieFile.path, contents: Data([0x00]))
+
+        let metadataWriter = RecordingMetadataWriter()
+        let model = AppModel(searchService: StubSearchService(results: []), metadataWriter: metadataWriter)
+        model.chooseMode(.movie)
+        model.importFiles(from: [movieFile])
+
+        model.files[0].selectedResult = makeResult(
+            id: 501,
+            title: "Original Title",
+            year: "1999",
+            confidence: .exact,
+            summary: "Exact movie match",
+            score: 200
+        )
+        model.files[0].metadataDraft.title = "Custom Cut"
+        model.files[0].metadataDraft.genre = "Neo Noir"
+        model.files[0].metadataDraft.sortTitle = "Custom Cut, The"
+        model.files[0].metadataDraft.synopsis = "Edited before saving."
+
+        await model.save(file: model.files[0])
+
+        XCTAssertEqual(metadataWriter.calls.first?.result.trackName, "Custom Cut")
+        XCTAssertEqual(metadataWriter.calls.first?.result.primaryGenreName, "Neo Noir")
+        XCTAssertEqual(metadataWriter.calls.first?.result.sortTitle, "Custom Cut, The")
+        XCTAssertEqual(metadataWriter.calls.first?.result.synopsis, "Edited before saving.")
+        XCTAssertEqual(model.lastSaveReport?.successCount, 1)
+    }
+
+    func testMetadataProviderPreferencesTrimAndPersistKeys() throws {
+        MetadataProviderPreferences.removeStoredSecrets()
+        defer {
+            MetadataProviderPreferences.removeStoredSecrets()
+            UserDefaults.standard.removeObject(forKey: MetadataProviderPreferences.preferredProviderSourceKey)
+        }
+
+        MetadataProviderPreferences.tmdbAPIKey = "  tmdb-test-key  "
+        MetadataProviderPreferences.omdbAPIKey = "\nomdb-test-key\n"
+        MetadataProviderPreferences.preferredProviderSource = .tmdb
+
+        XCTAssertEqual(MetadataProviderPreferences.tmdbAPIKey, "tmdb-test-key")
+        XCTAssertEqual(MetadataProviderPreferences.omdbAPIKey, "omdb-test-key")
+        XCTAssertEqual(MetadataProviderPreferences.preferredProviderSource, .tmdb)
+        XCTAssertNil(UserDefaults.standard.string(forKey: MetadataProviderPreferences.tmdbAPIKeyKey))
+        XCTAssertNil(UserDefaults.standard.string(forKey: MetadataProviderPreferences.omdbAPIKeyKey))
+
+        MetadataProviderPreferences.tmdbAPIKey = "   "
+        MetadataProviderPreferences.omdbAPIKey = ""
+
+        XCTAssertEqual(MetadataProviderPreferences.tmdbAPIKey, "")
+        XCTAssertEqual(MetadataProviderPreferences.omdbAPIKey, "")
+    }
+
+    func testMetadataProviderPreferencesMigrateLegacyUserDefaultsKeys() throws {
+        MetadataProviderPreferences.removeStoredSecrets()
+        defer {
+            MetadataProviderPreferences.removeStoredSecrets()
+        }
+
+        UserDefaults.standard.set("  legacy-tmdb-key  ", forKey: MetadataProviderPreferences.tmdbAPIKeyKey)
+        UserDefaults.standard.set("\nlegacy-omdb-key\n", forKey: MetadataProviderPreferences.omdbAPIKeyKey)
+
+        XCTAssertEqual(MetadataProviderPreferences.tmdbAPIKey, "legacy-tmdb-key")
+        XCTAssertEqual(MetadataProviderPreferences.omdbAPIKey, "legacy-omdb-key")
+        XCTAssertNil(UserDefaults.standard.string(forKey: MetadataProviderPreferences.tmdbAPIKeyKey))
+        XCTAssertNil(UserDefaults.standard.string(forKey: MetadataProviderPreferences.omdbAPIKeyKey))
+        XCTAssertEqual(MetadataProviderPreferences.tmdbAPIKey, "legacy-tmdb-key")
+        XCTAssertEqual(MetadataProviderPreferences.omdbAPIKey, "legacy-omdb-key")
+    }
+
+    @MainActor
+    func testSafetyBackupPreferenceIsPassedToWriter() async throws {
+        let directory = try makeTemporaryDirectory(prefix: "MetaFetchSafetyPreferenceTests")
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+            UserDefaults.standard.removeObject(forKey: "MetaFetchCreateSafetyBackups")
+        }
+
+        let movieFile = directory.appendingPathComponent("Safety.Mode.mp4")
+        FileManager.default.createFile(atPath: movieFile.path, contents: Data([0x00]))
+
+        let metadataWriter = RecordingMetadataWriter()
+        let model = AppModel(searchService: StubSearchService(results: []), metadataWriter: metadataWriter)
+        model.createSafetyBackups = true
+        model.chooseMode(.movie)
+        model.importFiles(from: [movieFile])
+        model.files[0].selectedResult = makeResult(
+            id: 601,
+            title: "Safety Mode",
+            year: "2001",
+            confidence: .exact,
+            summary: "Exact movie match",
+            score: 200
+        )
+
+        await model.save(file: model.files[0])
+
+        XCTAssertEqual(metadataWriter.calls.first?.options.createSafetyBackup, true)
+    }
+
+    @MainActor
+    func testImportingFolderAddsNestedMP4FilesForSeasonBatches() async throws {
+        let directory = try makeTemporaryDirectory(prefix: "MetaFetchFolderImportTests")
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let seasonFolder = directory.appendingPathComponent("The Audacity/Season 1")
+        try FileManager.default.createDirectory(at: seasonFolder, withIntermediateDirectories: true)
+        let firstEpisode = seasonFolder.appendingPathComponent("The.Audacity.S01E01.mp4")
+        let secondEpisode = seasonFolder.appendingPathComponent("The.Audacity.S01E02.mp4")
+        let poster = seasonFolder.appendingPathComponent("poster.jpg")
+        FileManager.default.createFile(atPath: firstEpisode.path, contents: Data([0x00]))
+        FileManager.default.createFile(atPath: secondEpisode.path, contents: Data([0x00]))
+        FileManager.default.createFile(atPath: poster.path, contents: Data([0x00]))
+
+        let model = AppModel(searchService: StubSearchService(results: []))
+        model.chooseMode(.tvShow)
+        model.importFiles(from: [directory.appendingPathComponent("The Audacity")])
+
+        XCTAssertEqual(model.files.map(\.filename), [
+            "The.Audacity.S01E01.mp4",
+            "The.Audacity.S01E02.mp4",
+        ])
+        XCTAssertEqual(model.noticeMessage, "Added 2 MP4 files from 1 folder.")
+    }
+
+    @MainActor
+    func testCustomPosterOverrideWinsOverSourceArtwork() async throws {
+        let directory = try makeTemporaryDirectory(prefix: "MetaFetchCustomPosterTests")
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let movieFile = directory.appendingPathComponent("Custom.Poster.mp4")
+        let customPoster = directory.appendingPathComponent("custom-poster.png")
+        FileManager.default.createFile(atPath: movieFile.path, contents: Data([0x00]))
+        try minimalPNGData().write(to: customPoster)
+
+        let sourceArtworkURL = URL(string: "https://upload.wikimedia.org/wikipedia/commons/source.jpg")!
+        let metadataWriter = RecordingMetadataWriter()
+        let model = AppModel(searchService: StubSearchService(results: []), metadataWriter: metadataWriter)
+        model.chooseMode(.movie)
+        model.importFiles(from: [movieFile])
+        model.files[0].selectedResult = makeResult(
+            id: 701,
+            title: "Custom Poster",
+            year: "2007",
+            confidence: .exact,
+            summary: "Exact movie match",
+            score: 200
+        ).replacingArtworkURL(sourceArtworkURL)
+        model.files[0].customArtworkURL = customPoster
+
+        await model.save(file: model.files[0])
+
+        XCTAssertEqual(metadataWriter.savedArtworkURLs, [customPoster.standardizedFileURL])
+        XCTAssertEqual(metadataWriter.calls.map(\.includeArtwork), [true])
+    }
+
+    @MainActor
+    func testPosterSavingDefaultDisablesArtworkForNewImports() async throws {
+        resetAdvancedPreferenceDefaults()
+        defer {
+            resetAdvancedPreferenceDefaults()
+        }
+
+        let directory = try makeTemporaryDirectory(prefix: "MetaFetchPosterDefaultTests")
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let movieFile = directory.appendingPathComponent("No.Poster.Save.mp4")
+        FileManager.default.createFile(atPath: movieFile.path, contents: Data([0x00]))
+
+        let artworkURL = URL(string: "https://upload.wikimedia.org/wikipedia/commons/poster.jpg")!
+        let metadataWriter = RecordingMetadataWriter()
+        let model = AppModel(searchService: StubSearchService(results: []), metadataWriter: metadataWriter)
+        model.posterSavingDefault = false
+        model.chooseMode(.movie)
+        model.importFiles(from: [movieFile])
+        model.files[0].selectedResult = makeResult(
+            id: 801,
+            title: "No Poster Save",
+            year: "2008",
+            confidence: .exact,
+            summary: "Exact movie match",
+            score: 200
+        ).replacingArtworkURL(artworkURL)
+
+        await model.save(file: model.files[0])
+
+        XCTAssertFalse(model.files[0].posterSavingEnabled)
+        XCTAssertEqual(metadataWriter.calls.map(\.includeArtwork), [false])
+    }
+
+    @MainActor
+    func testRenameAfterSaveUsesSelectedMetadataTemplate() async throws {
+        resetAdvancedPreferenceDefaults()
+        defer {
+            resetAdvancedPreferenceDefaults()
+        }
+
+        let directory = try makeTemporaryDirectory(prefix: "MetaFetchRenameTests")
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let movieFile = directory.appendingPathComponent("Messy.Release.Name.mp4")
+        FileManager.default.createFile(atPath: movieFile.path, contents: Data([0x00]))
+
+        let metadataWriter = RecordingMetadataWriter()
+        let model = AppModel(searchService: StubSearchService(results: []), metadataWriter: metadataWriter)
+        model.renameAfterSave = true
+        model.movieRenameTemplate = "{title} ({year})"
+        model.chooseMode(.movie)
+        model.importFiles(from: [movieFile])
+        model.files[0].selectedResult = makeResult(
+            id: 901,
+            title: "Clean Movie",
+            year: "1995",
+            confidence: .exact,
+            summary: "Exact movie match",
+            score: 200
+        )
+
+        await model.save(file: model.files[0])
+
+        XCTAssertEqual(model.files[0].filename, "Clean Movie (1995).mp4")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("Clean Movie (1995).mp4").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: movieFile.path))
     }
 
     @MainActor
@@ -504,6 +773,23 @@ private func makeTemporaryDirectory(prefix: String) throws -> URL {
     return directory
 }
 
+private func resetAdvancedPreferenceDefaults() {
+    [
+        "MetaFetchPosterSavingDefault",
+        "MetaFetchAutoApplyClearTVBatchMatches",
+        "MetaFetchRenameAfterSave",
+        "MetaFetchMovieRenameTemplate",
+        "MetaFetchTVRenameTemplate",
+        "MetaFetchPreferredProviderSource",
+    ].forEach {
+        UserDefaults.standard.removeObject(forKey: $0)
+    }
+}
+
+private func minimalPNGData() -> Data {
+    Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")!
+}
+
 private func makeTestAtom(_ type: String, payload: Data) -> Data {
     var data = Data()
     data.append(makeTestUInt32Data(UInt32(payload.count + 8)))
@@ -541,7 +827,7 @@ private struct StubSearchService: MediaSearchServing {
 }
 
 private final class RecordingMetadataWriter: MetadataWriting, @unchecked Sendable {
-    private(set) var calls: [(fileURL: URL, result: MediaSearchResult, includeArtwork: Bool)] = []
+    private(set) var calls: [(fileURL: URL, result: MediaSearchResult, includeArtwork: Bool, options: MetadataWriteOptions)] = []
 
     var savedPaths: [String] {
         calls.map { $0.fileURL.standardizedFileURL.path }
@@ -555,12 +841,18 @@ private final class RecordingMetadataWriter: MetadataWriting, @unchecked Sendabl
         to fileURL: URL,
         using result: MediaSearchResult,
         includeArtwork: Bool,
+        options: MetadataWriteOptions,
         progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)?
-    ) async throws {
+    ) async throws -> MetadataWriteOutcome {
         await progressHandler?(MetadataWriteProgress(
             fractionCompleted: 1,
             message: "Verified test save"
         ))
-        calls.append((fileURL.standardizedFileURL, result, includeArtwork))
+        calls.append((fileURL.standardizedFileURL, result, includeArtwork, options))
+        return MetadataWriteOutcome(
+            path: .nativeMetadataOnly,
+            includedArtwork: includeArtwork,
+            backupURL: nil
+        )
     }
 }

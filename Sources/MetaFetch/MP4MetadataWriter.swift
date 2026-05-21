@@ -12,8 +12,9 @@ protocol MetadataWriting: Sendable {
         to fileURL: URL,
         using result: MediaSearchResult,
         includeArtwork: Bool,
+        options: MetadataWriteOptions,
         progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)?
-    ) async throws
+    ) async throws -> MetadataWriteOutcome
 }
 
 struct MP4MetadataWriter: MetadataWriting {
@@ -50,11 +51,18 @@ struct MP4MetadataWriter: MetadataWriting {
         to fileURL: URL,
         using result: MediaSearchResult,
         includeArtwork: Bool,
+        options: MetadataWriteOptions = .speedFirst,
         progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)? = nil
-    ) async throws {
+    ) async throws -> MetadataWriteOutcome {
         try MediaFileImportValidator.validateStillSafeToWrite(
             fileURL,
             expectedIdentity: nil
+        )
+
+        let backupURL = try await createSafetyBackupIfNeeded(
+            for: fileURL,
+            options: options,
+            progressHandler: progressHandler
         )
 
         let artworkData = includeArtwork
@@ -69,14 +77,18 @@ struct MP4MetadataWriter: MetadataWriting {
             requiresArtwork: includeArtwork
         )
 
-        if await attemptNativeAtomWrite(
+        if let nativePath = await attemptNativeAtomWrite(
             to: fileURL,
             using: result,
             artworkData: artworkData,
             verificationExpectation: verificationExpectation,
             progressHandler: progressHandler
         ) {
-            return
+            return MetadataWriteOutcome(
+                path: nativePath,
+                includedArtwork: includeArtwork,
+                backupURL: backupURL
+            )
         }
 
         let metadataItems = try await buildMetadataItems(for: result, includeArtwork: includeArtwork)
@@ -90,7 +102,11 @@ struct MP4MetadataWriter: MetadataWriting {
             )
 
             if usedFastPath {
-                return
+                return MetadataWriteOutcome(
+                    path: .nativeMetadataOnly,
+                    includedArtwork: includeArtwork,
+                    backupURL: backupURL
+                )
             }
         }
 
@@ -149,6 +165,34 @@ struct MP4MetadataWriter: MetadataWriting {
         ) else {
             throw WriterError.metadataVerificationFailed
         }
+
+        return MetadataWriteOutcome(
+            path: .avFoundationRewrite,
+            includedArtwork: includeArtwork,
+            backupURL: backupURL
+        )
+    }
+
+    private func createSafetyBackupIfNeeded(
+        for fileURL: URL,
+        options: MetadataWriteOptions,
+        progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)?
+    ) async throws -> URL? {
+        guard options.createSafetyBackup else {
+            return nil
+        }
+
+        await progressHandler?(makeProgressUpdate(
+            fractionCompleted: 0.01,
+            message: "Creating safety backup before writing"
+        ))
+
+        let backupURL = fileURL.deletingPathExtension()
+            .appendingPathExtension("metafetch-backup-\(UUID().uuidString)")
+            .appendingPathExtension(fileURL.pathExtension)
+
+        try FileManager.default.copyItem(at: fileURL, to: backupURL)
+        return backupURL
     }
 
     private func attemptNativeAtomWrite(
@@ -157,14 +201,14 @@ struct MP4MetadataWriter: MetadataWriting {
         artworkData: Data?,
         verificationExpectation: MetadataVerificationExpectation,
         progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)?
-    ) async -> Bool {
+    ) async -> MetadataWritePath? {
         await progressHandler?(makeProgressUpdate(
             fractionCompleted: 0.04,
             message: "Preparing native MP4 metadata writer"
         ))
 
         do {
-            try await atomWriter.writeMetadata(
+            let path = try await atomWriter.writeMetadata(
                 to: fileURL,
                 using: result,
                 artworkData: artworkData,
@@ -184,20 +228,20 @@ struct MP4MetadataWriter: MetadataWriting {
                     fractionCompleted: 0.08,
                     message: "Native MP4 metadata did not verify, falling back to AVFoundation"
                 ))
-                return false
+                return nil
             }
 
             await progressHandler?(makeProgressUpdate(
                 fractionCompleted: 1,
                 message: "Finished MP4 metadata atom save"
             ))
-            return true
+            return path
         } catch {
             await progressHandler?(makeProgressUpdate(
                 fractionCompleted: 0.08,
                 message: "Native MP4 writer could not update this file, falling back to AVFoundation"
             ))
-            return false
+            return nil
         }
     }
 

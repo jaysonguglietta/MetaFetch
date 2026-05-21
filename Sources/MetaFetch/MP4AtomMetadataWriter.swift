@@ -42,7 +42,7 @@ struct MP4AtomMetadataWriter: Sendable {
         using result: MediaSearchResult,
         artworkData: Data?,
         progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)? = nil
-    ) async throws {
+    ) async throws -> MetadataWritePath {
         await progressHandler?(MetadataWriteProgress(
             fractionCompleted: 0.12,
             message: "Reading MP4 movie header"
@@ -88,7 +88,7 @@ struct MP4AtomMetadataWriter: Sendable {
             oldReservedSize: oldReservedSize,
             progressHandler: progressHandler
         ) {
-            return
+            return .nativeMetadataOnly
         }
 
         await progressHandler?(MetadataWriteProgress(
@@ -117,6 +117,47 @@ struct MP4AtomMetadataWriter: Sendable {
             followingFreeBox: followingFreeBox,
             updatedMovieAtom: updatedMovieAtom,
             progressHandler: progressHandler
+        )
+
+        return .nativeContainerRewrite
+    }
+
+    func inspectHeadroom(
+        at fileURL: URL,
+        using result: MediaSearchResult,
+        artworkData: Data?
+    ) throws -> MP4HeadroomInspection {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer {
+            try? handle.close()
+        }
+
+        let fileSize = try handle.seekToEnd()
+        let topLevelBoxes = try readTopLevelBoxes(from: handle, fileSize: fileSize)
+
+        guard let movieBox = topLevelBoxes.first(where: { $0.type == .moov }) else {
+            throw AtomWriterError.missingMovieAtom
+        }
+
+        let followingFreeBox = topLevelBoxes.first {
+            $0.start == movieBox.end && $0.type == .free
+        }
+        let reservedEnd = followingFreeBox?.end ?? movieBox.end
+        let oldReservedSize = reservedEnd - movieBox.start
+
+        let movieAtomData = try readMovieAtomData(from: handle, movieBox: movieBox)
+        let updatedMovieAtom = try updatedMovieAtom(
+            from: movieAtomData,
+            headerSize: Int(movieBox.headerSize),
+            result: result,
+            artworkData: artworkData
+        )
+        let requiredBytes = UInt64(updatedMovieAtom.count)
+
+        return MP4HeadroomInspection(
+            status: requiredBytes <= oldReservedSize ? .enough : .needsRewrite,
+            reservedBytes: oldReservedSize,
+            requiredBytes: requiredBytes
         )
     }
 
@@ -439,15 +480,16 @@ struct MP4AtomMetadataWriter: Sendable {
 
         switch result.mediaKind {
         case .movie:
-            appendTextAtom(.sortName, value: result.trackName, to: &atoms)
+            appendTextAtom(.sortName, value: result.sortTitle ?? result.trackName, to: &atoms)
             appendIntegerAtom(.mediaKind, value: 9, byteCount: 1, to: &atoms)
         case .tvEpisode:
             let showName = result.seriesName?.trimmedNilIfBlank
+            let sortShowName = result.sortSeriesName?.trimmedNilIfBlank ?? showName
             appendTextAtom(.tvShow, value: showName, to: &atoms)
             appendTextAtom(.album, value: showName, to: &atoms)
-            appendTextAtom(.sortShow, value: showName, to: &atoms)
-            appendTextAtom(.sortAlbum, value: showName, to: &atoms)
-            appendTextAtom(.sortName, value: result.trackName, to: &atoms)
+            appendTextAtom(.sortShow, value: sortShowName, to: &atoms)
+            appendTextAtom(.sortAlbum, value: sortShowName, to: &atoms)
+            appendTextAtom(.sortName, value: result.sortTitle ?? result.trackName, to: &atoms)
             appendTextAtom(.episodeId, value: result.seasonEpisodeLabel, to: &atoms)
             appendIntegerAtom(.mediaKind, value: 10, byteCount: 1, to: &atoms)
 
@@ -462,9 +504,9 @@ struct MP4AtomMetadataWriter: Sendable {
         case .tvSeries:
             appendTextAtom(.tvShow, value: result.trackName, to: &atoms)
             appendTextAtom(.album, value: result.trackName, to: &atoms)
-            appendTextAtom(.sortShow, value: result.trackName, to: &atoms)
-            appendTextAtom(.sortAlbum, value: result.trackName, to: &atoms)
-            appendTextAtom(.sortName, value: result.trackName, to: &atoms)
+            appendTextAtom(.sortShow, value: result.sortSeriesName ?? result.trackName, to: &atoms)
+            appendTextAtom(.sortAlbum, value: result.sortSeriesName ?? result.trackName, to: &atoms)
+            appendTextAtom(.sortName, value: result.sortTitle ?? result.trackName, to: &atoms)
             appendIntegerAtom(.mediaKind, value: 10, byteCount: 1, to: &atoms)
         }
 

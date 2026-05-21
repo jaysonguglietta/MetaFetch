@@ -50,11 +50,22 @@ enum TVBatchTab: String, CaseIterable, Identifiable {
 
 @MainActor
 final class AppModel: ObservableObject {
+    private static let safetyBackupsPreferenceKey = "MetaFetchCreateSafetyBackups"
+    private static let posterSavingDefaultKey = "MetaFetchPosterSavingDefault"
+    private static let autoApplyClearTVBatchMatchesKey = "MetaFetchAutoApplyClearTVBatchMatches"
+    private static let renameAfterSaveKey = "MetaFetchRenameAfterSave"
+    private static let movieRenameTemplateKey = "MetaFetchMovieRenameTemplate"
+    private static let tvRenameTemplateKey = "MetaFetchTVRenameTemplate"
+    private static let watchFolderPollingInterval: TimeInterval = 12
+
     @Published private(set) var files: [MovieFileEntry] = []
     @Published var selectedFileID: UUID?
     @Published var isFileImporterPresented = false
+    @Published var isFolderImporterPresented = false
+    @Published var isWatchFolderImporterPresented = false
     @Published var noticeMessage: String?
     @Published var selectedMode: MediaLibraryMode?
+    @Published var queueFilter: FileQueueFilter = .all
     @Published var updateState: AppUpdateState = .idle
     @Published var batchQueryText = ""
     @Published var batchSearchResults: [MediaSearchResult] = []
@@ -64,19 +75,84 @@ final class AppModel: ObservableObject {
     @Published var isBatchSaving = false
     @Published var batchStatusMessage = "Search for the show once, then apply it to every loaded episode."
     @Published var batchErrorMessage: String?
+    @Published var lastSaveReport: SaveReport?
+    @Published var presentedSaveReport: SaveReport?
+    @Published var tmdbAPIKey: String {
+        didSet {
+            MetadataProviderPreferences.tmdbAPIKey = tmdbAPIKey
+        }
+    }
+    @Published var omdbAPIKey: String {
+        didSet {
+            MetadataProviderPreferences.omdbAPIKey = omdbAPIKey
+        }
+    }
+    @Published var preferredProviderSource: MetadataProviderSource {
+        didSet {
+            MetadataProviderPreferences.preferredProviderSource = preferredProviderSource
+        }
+    }
+    @Published var createSafetyBackups: Bool {
+        didSet {
+            UserDefaults.standard.set(createSafetyBackups, forKey: Self.safetyBackupsPreferenceKey)
+        }
+    }
+    @Published var posterSavingDefault: Bool {
+        didSet {
+            UserDefaults.standard.set(posterSavingDefault, forKey: Self.posterSavingDefaultKey)
+            for file in files {
+                file.posterSavingEnabled = posterSavingDefault
+            }
+        }
+    }
+    @Published var autoApplyClearTVBatchMatches: Bool {
+        didSet {
+            UserDefaults.standard.set(autoApplyClearTVBatchMatches, forKey: Self.autoApplyClearTVBatchMatchesKey)
+        }
+    }
+    @Published var renameAfterSave: Bool {
+        didSet {
+            UserDefaults.standard.set(renameAfterSave, forKey: Self.renameAfterSaveKey)
+        }
+    }
+    @Published var movieRenameTemplate: String {
+        didSet {
+            UserDefaults.standard.set(movieRenameTemplate, forKey: Self.movieRenameTemplateKey)
+        }
+    }
+    @Published var tvRenameTemplate: String {
+        didSet {
+            UserDefaults.standard.set(tvRenameTemplate, forKey: Self.tvRenameTemplateKey)
+        }
+    }
+    @Published var watchedFolderURL: URL?
+    @Published var isWatchingFolder = false
 
     private let searchService: MediaSearchServing
     private let metadataWriter: MetadataWriting
     private let updateService: AppUpdateChecking
+    private let headroomInspector: MP4HeadroomInspecting
+    private var watchFolderTimer: Timer?
 
     init(
         searchService: MediaSearchServing = MetadataCatalogSearchService(),
         metadataWriter: MetadataWriting = MP4MetadataWriter(),
-        updateService: AppUpdateChecking = GitHubReleaseUpdateService()
+        updateService: AppUpdateChecking = GitHubReleaseUpdateService(),
+        headroomInspector: MP4HeadroomInspecting = MP4HeadroomInspector()
     ) {
         self.searchService = searchService
         self.metadataWriter = metadataWriter
         self.updateService = updateService
+        self.headroomInspector = headroomInspector
+        self.createSafetyBackups = UserDefaults.standard.bool(forKey: Self.safetyBackupsPreferenceKey)
+        self.tmdbAPIKey = MetadataProviderPreferences.tmdbAPIKey
+        self.omdbAPIKey = MetadataProviderPreferences.omdbAPIKey
+        self.preferredProviderSource = MetadataProviderPreferences.preferredProviderSource
+        self.posterSavingDefault = UserDefaults.standard.object(forKey: Self.posterSavingDefaultKey) as? Bool ?? true
+        self.autoApplyClearTVBatchMatches = UserDefaults.standard.bool(forKey: Self.autoApplyClearTVBatchMatchesKey)
+        self.renameAfterSave = UserDefaults.standard.bool(forKey: Self.renameAfterSaveKey)
+        self.movieRenameTemplate = UserDefaults.standard.string(forKey: Self.movieRenameTemplateKey)?.trimmedNilIfBlank ?? RenameTemplateDefaults.movie
+        self.tvRenameTemplate = UserDefaults.standard.string(forKey: Self.tvRenameTemplateKey)?.trimmedNilIfBlank ?? RenameTemplateDefaults.tv
     }
 
     var selectedFile: MovieFileEntry? {
@@ -89,6 +165,28 @@ final class AppModel: ObservableObject {
 
     var canSaveAnyTaggedFiles: Bool {
         saveReadyCount > 0
+    }
+
+    var filteredFiles: [MovieFileEntry] {
+        files.filter(matchesQueueFilter)
+    }
+
+    var queueFilterSummary: String {
+        if queueFilter == .all {
+            return "\(files.count) loaded"
+        }
+
+        return "\(filteredFiles.count) of \(files.count) shown"
+    }
+
+    var watchFolderSummary: String {
+        guard let watchedFolderURL else {
+            return "No watch folder selected."
+        }
+
+        return isWatchingFolder
+            ? "Watching \(watchedFolderURL.lastPathComponent) every \(Int(Self.watchFolderPollingInterval)) seconds."
+            : "Watch folder selected: \(watchedFolderURL.lastPathComponent)."
     }
 
     var canUseTVBatchTools: Bool {
@@ -170,34 +268,52 @@ final class AppModel: ObservableObject {
             return
         }
 
-        let validFiles = urls
+        let expandedImport = MediaImportURLExpander.expandedMediaFileURLs(from: urls)
+        let validFiles = expandedImport.urls
             .compactMap(MediaFileImportValidator.validatedImport)
+        let rejectedCount = expandedImport.rejectedCount + expandedImport.urls.count - validFiles.count
 
         guard !validFiles.isEmpty else {
-            noticeMessage = "Only local, writable `.mp4` files are accepted right now."
+            noticeMessage = expandedImport.scannedFolderCount > 0
+                ? "No local, writable `.mp4` files were found in the selected folder."
+                : "Only local, writable `.mp4` files are accepted right now."
             return
         }
 
         var knownPaths = Set(files.map { $0.fileURL.standardizedFileURL.path })
+        var duplicateCount = 0
         let newEntries = validFiles.compactMap { validatedFile -> MovieFileEntry? in
             let url = validatedFile.url
             guard knownPaths.insert(url.path).inserted else {
+                duplicateCount += 1
                 return nil
             }
 
-            return MovieFileEntry(
+            let entry = MovieFileEntry(
                 fileURL: url,
                 mediaMode: selectedMode,
                 importIdentity: validatedFile.identity
             )
+            entry.posterSavingEnabled = posterSavingDefault
+            return entry
         }
 
         guard !newEntries.isEmpty else {
-            noticeMessage = "Those MP4 files are already loaded."
+            noticeMessage = importSummary(
+                addedCount: 0,
+                duplicateCount: duplicateCount,
+                rejectedCount: rejectedCount,
+                scannedFolderCount: expandedImport.scannedFolderCount
+            ) ?? "Those MP4 files are already loaded."
             return
         }
 
-        noticeMessage = nil
+        noticeMessage = importSummary(
+            addedCount: newEntries.count,
+            duplicateCount: duplicateCount,
+            rejectedCount: rejectedCount,
+            scannedFolderCount: expandedImport.scannedFolderCount
+        )
         files.append(contentsOf: newEntries)
         refreshBatchQuerySuggestion()
 
@@ -218,6 +334,23 @@ final class AppModel: ObservableObject {
         for index in offsets.sorted(by: >) {
             files.remove(at: index)
         }
+
+        if let selectedFileID, removedIDs.contains(selectedFileID) {
+            self.selectedFileID = files.first?.id
+        }
+
+        if files.isEmpty {
+            resetBatchSearch()
+        }
+    }
+
+    func removeFilteredFiles(at offsets: IndexSet) {
+        let visibleFiles = filteredFiles
+        let removedIDs = offsets.compactMap { index in
+            visibleFiles.indices.contains(index) ? visibleFiles[index].id : nil
+        }
+
+        files.removeAll { removedIDs.contains($0.id) }
 
         if let selectedFileID, removedIDs.contains(selectedFileID) {
             self.selectedFileID = files.first?.id
@@ -261,6 +394,7 @@ final class AppModel: ObservableObject {
             let previousSelectionID = file.selectedResult?.id
             let preservedSelection: MediaSearchResult?
             file.searchResults = results
+            file.providerDiagnostics = providerDiagnosticSummary(for: results, mode: file.mediaMode)
             file.isSearching = false
 
             if let previousSelectionID,
@@ -310,15 +444,81 @@ final class AppModel: ObservableObject {
 
     @discardableResult
     func save(file: MovieFileEntry) async -> Bool {
+        let reportEntry = await saveAndBuildReportEntry(file: file)
+        let report = SaveReport(createdAt: Date(), entries: [reportEntry])
+        lastSaveReport = report
+        presentedSaveReport = report
+        return reportEntry.didSucceed
+    }
+
+    func inspectHeadroom(for file: MovieFileEntry) async {
         guard let selectedResult = file.selectedResult else {
             file.errorMessage = file.mediaMode.saveSelectionError
-            return false
+            return
+        }
+
+        let resultForInspection = file.metadataDraft
+            .applying(to: selectedResult)
+            .replacingArtworkURL(file.selectedArtworkURL)
+
+        file.isInspectingHeadroom = true
+        file.headroomInspection = nil
+
+        let inspection = await headroomInspector.inspect(
+            fileURL: file.fileURL,
+            result: resultForInspection,
+            includeArtwork: file.willSaveArtwork
+        )
+
+        file.headroomInspection = inspection
+        file.isInspectingHeadroom = false
+        file.statusMessage = inspection.headline
+    }
+
+    private func saveAndBuildReportEntry(
+        file: MovieFileEntry,
+        includeArtworkOverride: Bool? = nil
+    ) async -> SaveReportEntry {
+        let startedAt = Date()
+
+        guard let selectedResult = file.selectedResult else {
+            file.errorMessage = file.mediaMode.saveSelectionError
+            return SaveReportEntry(
+                filename: file.filename,
+                fileURL: file.fileURL,
+                title: file.filename,
+                outcome: nil,
+                errorMessage: file.mediaMode.saveSelectionError,
+                duration: Date().timeIntervalSince(startedAt)
+            )
+        }
+
+        guard file.metadataDraft.isValid(for: selectedResult) else {
+            let message = "Enter a title before saving metadata."
+            file.errorMessage = message
+            file.statusMessage = "Metadata editor needs a title"
+            return SaveReportEntry(
+                filename: file.filename,
+                fileURL: file.fileURL,
+                title: selectedResult.trackName,
+                outcome: nil,
+                errorMessage: message,
+                duration: Date().timeIntervalSince(startedAt)
+            )
         }
 
         if file.requiresSeriesOnlySaveConfirmation {
-            file.errorMessage = "This is a series-level TV match for an episode query. Confirm the series-only save before writing metadata."
+            let message = "This is a series-level TV match for an episode query. Confirm the series-only save before writing metadata."
+            file.errorMessage = message
             file.statusMessage = "Series-only save needs confirmation"
-            return false
+            return SaveReportEntry(
+                filename: file.filename,
+                fileURL: file.fileURL,
+                title: selectedResult.trackName,
+                outcome: nil,
+                errorMessage: message,
+                duration: Date().timeIntervalSince(startedAt)
+            )
         }
 
         do {
@@ -329,15 +529,25 @@ final class AppModel: ObservableObject {
         } catch {
             file.errorMessage = error.localizedDescription
             file.statusMessage = "Save stopped before writing"
-            return false
+            return SaveReportEntry(
+                filename: file.filename,
+                fileURL: file.fileURL,
+                title: selectedResult.trackName,
+                outcome: nil,
+                errorMessage: error.localizedDescription,
+                duration: Date().timeIntervalSince(startedAt)
+            )
         }
 
-        let includeArtwork = file.willSaveArtwork
-        let resultForWriting = selectedResult.replacingArtworkURL(file.selectedArtworkURL)
+        let includeArtwork = includeArtworkOverride ?? file.willSaveArtwork
+        let resultForWriting = file.metadataDraft
+            .applying(to: selectedResult)
+            .replacingArtworkURL(file.selectedArtworkURL)
         let fileID = file.id
         file.isSaving = true
         file.saveProgress = nil
         file.errorMessage = nil
+        file.lastSaveOutcome = nil
         file.statusMessage = includeArtwork
             ? "Preparing artwork and metadata"
             : "Preparing metadata-only fast path"
@@ -352,28 +562,45 @@ final class AppModel: ObservableObject {
                 : "Starting metadata-only fast save"
             file.saveProgress = 0
 
-            try await metadataWriter.writeMetadata(
+            let outcome = try await metadataWriter.writeMetadata(
                 to: file.fileURL,
                 using: resultForWriting,
                 includeArtwork: includeArtwork,
+                options: MetadataWriteOptions(createSafetyBackup: createSafetyBackups),
                 progressHandler: { [weak self] progress in
                     await self?.applySaveProgress(progress, toFileWithID: fileID)
                 }
             )
             file.saveProgress = 1
             file.lastSavedAt = Date()
+            file.lastSaveOutcome = outcome
+            let renameMessage = renameSavedFileIfNeeded(file: file, result: resultForWriting)
             file.importIdentity = MediaFileImportValidator.identity(for: file.fileURL)
             file.isSaving = false
             file.saveProgress = nil
-            file.statusMessage = "Verified MP4 tags at \(file.lastSavedAt?.formatted(date: .omitted, time: .shortened) ?? "just now")"
+            file.statusMessage = renameMessage ?? "Verified \(outcome.path.label.lowercased()) at \(file.lastSavedAt?.formatted(date: .omitted, time: .shortened) ?? "just now")"
             advanceSelection(afterSaving: file)
-            return true
+            return SaveReportEntry(
+                filename: file.filename,
+                fileURL: file.fileURL,
+                title: resultForWriting.trackName,
+                outcome: outcome,
+                errorMessage: nil,
+                duration: Date().timeIntervalSince(startedAt)
+            )
         } catch {
             file.isSaving = false
             file.saveProgress = nil
             file.statusMessage = "Save failed"
             file.errorMessage = error.localizedDescription
-            return false
+            return SaveReportEntry(
+                filename: file.filename,
+                fileURL: file.fileURL,
+                title: resultForWriting.trackName,
+                outcome: nil,
+                errorMessage: error.localizedDescription,
+                duration: Date().timeIntervalSince(startedAt)
+            )
         }
     }
 
@@ -403,17 +630,21 @@ final class AppModel: ObservableObject {
             batchStatusMessage = "Saving and verifying \(taggedFiles.count) tagged episode\(taggedFiles.count == 1 ? "" : "s")"
         }
 
-        var verifiedSaveCount = 0
+        var reportEntries: [SaveReportEntry] = []
 
         for (index, entry) in taggedFiles.enumerated() {
             if canUseTVBatchTools {
                 batchStatusMessage = "Saving \(index + 1) of \(taggedFiles.count): \(entry.filename)"
             }
 
-            if await save(file: entry) {
-                verifiedSaveCount += 1
-            }
+            reportEntries.append(await saveAndBuildReportEntry(file: entry))
         }
+
+        let report = SaveReport(createdAt: Date(), entries: reportEntries)
+        lastSaveReport = report
+        presentedSaveReport = report
+
+        let verifiedSaveCount = report.successCount
 
         guard canUseTVBatchTools else {
             return
@@ -449,6 +680,10 @@ final class AppModel: ObservableObject {
 
             if let selectedBatchResult {
                 batchStatusMessage = "Auto-selected \(selectedBatchResult.trackName). Click a card to apply a different show."
+                if autoApplyClearTVBatchMatches {
+                    await applyBatchResultToAllFiles(selectedBatchResult)
+                    return
+                }
             } else if results.isEmpty {
                 batchStatusMessage = "No show matches found"
                 batchErrorMessage = "Try a shorter show title."
@@ -556,6 +791,88 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func retryFailedSaves(from report: SaveReport, includeArtwork: Bool? = nil) async {
+        let failedURLs = Set(report.entries.filter { !$0.didSucceed }.map { $0.fileURL.standardizedFileURL.path })
+        let retryFiles = files.filter { failedURLs.contains($0.fileURL.standardizedFileURL.path) && $0.selectedResult != nil }
+
+        guard !retryFiles.isEmpty else {
+            noticeMessage = "No failed saves from that report are still loaded and retryable."
+            return
+        }
+
+        isBatchSaving = true
+        defer {
+            isBatchSaving = false
+        }
+
+        var entries: [SaveReportEntry] = []
+        for file in retryFiles {
+            entries.append(await saveAndBuildReportEntry(file: file, includeArtworkOverride: includeArtwork))
+        }
+
+        let retryReport = SaveReport(createdAt: Date(), entries: entries)
+        lastSaveReport = retryReport
+        presentedSaveReport = retryReport
+    }
+
+    func clearCompletedFiles() {
+        let savedIDs = Set(files.filter { $0.lastSavedAt != nil }.map(\.id))
+        guard !savedIDs.isEmpty else {
+            noticeMessage = "No saved files are ready to clear."
+            return
+        }
+
+        files.removeAll { savedIDs.contains($0.id) }
+        if let selectedFileID, savedIDs.contains(selectedFileID) {
+            self.selectedFileID = files.first?.id
+        }
+        noticeMessage = "Cleared \(savedIDs.count) saved file\(savedIDs.count == 1 ? "" : "s") from the queue."
+    }
+
+    func startWatchingFolder(_ folderURL: URL) {
+        guard selectedMode != nil else {
+            noticeMessage = "Choose Movie or TV Show before starting a watch folder."
+            return
+        }
+
+        watchedFolderURL = folderURL.standardizedFileURL
+        isWatchingFolder = true
+        scanWatchedFolder()
+
+        watchFolderTimer?.invalidate()
+        watchFolderTimer = Timer.scheduledTimer(withTimeInterval: Self.watchFolderPollingInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.scanWatchedFolder()
+            }
+        }
+    }
+
+    func stopWatchingFolder() {
+        watchFolderTimer?.invalidate()
+        watchFolderTimer = nil
+        isWatchingFolder = false
+        watchedFolderURL = nil
+    }
+
+    func scanWatchedFolder() {
+        guard isWatchingFolder,
+              let watchedFolderURL else {
+            return
+        }
+
+        let expandedImport = MediaImportURLExpander.expandedMediaFileURLs(from: [watchedFolderURL])
+        let knownPaths = Set(files.map { $0.fileURL.standardizedFileURL.path })
+        let newURLs = expandedImport.urls
+            .compactMap(MediaFileImportValidator.validatedImportURL)
+            .filter { !knownPaths.contains($0.standardizedFileURL.path) }
+
+        guard !newURLs.isEmpty else {
+            return
+        }
+
+        importFiles(from: newURLs)
+    }
+
     func checkForUpdates() async {
         guard !updateState.isBusy else {
             return
@@ -632,6 +949,129 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func matchesQueueFilter(_ file: MovieFileEntry) -> Bool {
+        switch queueFilter {
+        case .all:
+            return true
+        case .exact:
+            return file.selectedResult?.matchConfidence == .exact
+        case .needsReview:
+            return file.lastSavedAt == nil && !file.canSave
+        case .seriesOnly:
+            return file.isSeriesOnlySelectionForEpisodeQuery
+        case .saved:
+            return file.lastSavedAt != nil
+        case .failed:
+            return file.errorMessage != nil || file.statusMessage.lowercased().contains("failed")
+        case .hasPoster:
+            return file.hasSelectedArtwork
+        }
+    }
+
+    private func providerDiagnosticSummary(for results: [MediaSearchResult], mode: MediaLibraryMode) -> String {
+        switch mode {
+        case .tvShow:
+            return "TVMaze searched. \(results.count) result\(results.count == 1 ? "" : "s") returned."
+        case .movie:
+            let countsBySource = Dictionary(grouping: results, by: \.sourceName)
+                .mapValues(\.count)
+            var parts = ["Provider priority: \(preferredProviderSource.label)."]
+
+            for sourceName in ["Wikipedia", "TMDb", "OMDb"] {
+                if let count = countsBySource[sourceName], count > 0 {
+                    parts.append("\(sourceName): \(count)")
+                } else if sourceName == "TMDb", tmdbAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    parts.append("TMDb skipped: no key")
+                } else if sourceName == "OMDb", omdbAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    parts.append("OMDb skipped: no key")
+                } else {
+                    parts.append("\(sourceName): no results")
+                }
+            }
+
+            return parts.joined(separator: " • ")
+        }
+    }
+
+    private func renameSavedFileIfNeeded(file: MovieFileEntry, result: MediaSearchResult) -> String? {
+        guard renameAfterSave else {
+            return nil
+        }
+
+        let template = result.mediaKind == .movie ? movieRenameTemplate : tvRenameTemplate
+        let renderedName = renderedFilename(from: template, result: result)
+        guard !renderedName.isEmpty else {
+            file.errorMessage = "Rename template produced an empty filename."
+            return "Saved, but rename template was empty."
+        }
+
+        let targetURL = uniqueURLForRename(
+            directory: file.fileURL.deletingLastPathComponent(),
+            filename: renderedName,
+            extension: file.fileURL.pathExtension
+        )
+
+        guard targetURL.standardizedFileURL.path != file.fileURL.standardizedFileURL.path else {
+            return nil
+        }
+
+        do {
+            try FileManager.default.moveItem(at: file.fileURL, to: targetURL)
+            file.fileURL = targetURL
+            return "Saved and renamed to \(targetURL.lastPathComponent)"
+        } catch {
+            file.errorMessage = "Saved, but rename failed: \(error.localizedDescription)"
+            return "Saved, but rename failed."
+        }
+    }
+
+    private func renderedFilename(from template: String, result: MediaSearchResult) -> String {
+        let seasonEpisode = result.seasonEpisodeLabel ?? ""
+        let values = [
+            "{title}": result.trackName,
+            "{sort_title}": result.sortTitle ?? result.trackName,
+            "{series}": result.seriesName ?? result.trackName,
+            "{sort_series}": result.sortSeriesName ?? result.seriesName ?? result.trackName,
+            "{year}": result.releaseYear ?? "",
+            "{season}": result.seasonNumber.map { String(format: "%02d", $0) } ?? "",
+            "{episode}": result.episodeNumber.map { String(format: "%02d", $0) } ?? "",
+            "{season_episode}": seasonEpisode,
+        ]
+
+        let rendered = values.reduce(template) { partialResult, token in
+            partialResult.replacingOccurrences(of: token.key, with: token.value)
+        }
+
+        return sanitizedFilename(rendered)
+    }
+
+    private func sanitizedFilename(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: #"[/:]"#, with: " - ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
+    }
+
+    private func uniqueURLForRename(directory: URL, filename: String, extension pathExtension: String) -> URL {
+        let baseURL = directory.appendingPathComponent(filename).appendingPathExtension(pathExtension)
+        guard FileManager.default.fileExists(atPath: baseURL.path) else {
+            return baseURL
+        }
+
+        for index in 2...999 {
+            let candidate = directory
+                .appendingPathComponent("\(filename) \(index)")
+                .appendingPathExtension(pathExtension)
+            if !FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+
+        return directory
+            .appendingPathComponent("\(filename) \(UUID().uuidString)")
+            .appendingPathExtension(pathExtension)
+    }
+
     private func applySaveProgress(_ progress: MetadataWriteProgress, toFileWithID fileID: UUID) {
         guard let file = files.first(where: { $0.id == fileID }),
               file.isSaving else {
@@ -678,11 +1118,138 @@ final class AppModel: ObservableObject {
         batchStatusMessage = "Search for the show once, then apply it to every loaded episode."
         batchErrorMessage = nil
     }
+
+    private func importSummary(
+        addedCount: Int,
+        duplicateCount: Int,
+        rejectedCount: Int,
+        scannedFolderCount: Int
+    ) -> String? {
+        var parts: [String] = []
+
+        if addedCount > 0 {
+            if scannedFolderCount > 0 {
+                parts.append("Added \(addedCount) MP4 file\(addedCount == 1 ? "" : "s") from \(scannedFolderCount) folder\(scannedFolderCount == 1 ? "" : "s")")
+            } else {
+                parts.append("Added \(addedCount) MP4 file\(addedCount == 1 ? "" : "s")")
+            }
+        }
+
+        if duplicateCount > 0 {
+            parts.append("skipped \(duplicateCount) duplicate\(duplicateCount == 1 ? "" : "s")")
+        }
+
+        if rejectedCount > 0 {
+            parts.append("skipped \(rejectedCount) unsupported file\(rejectedCount == 1 ? "" : "s")")
+        }
+
+        guard !parts.isEmpty,
+              scannedFolderCount > 0 || duplicateCount > 0 || rejectedCount > 0 else {
+            return nil
+        }
+
+        let message = parts.joined(separator: ", ")
+        return message.prefix(1).uppercased() + message.dropFirst() + "."
+    }
 }
 
 struct ValidatedMediaFile: Sendable {
     let url: URL
     let identity: MediaFileIdentity?
+}
+
+struct ExpandedImportURLs: Sendable {
+    let urls: [URL]
+    let rejectedCount: Int
+    let scannedFolderCount: Int
+}
+
+enum MediaImportURLExpander {
+    static func expandedMediaFileURLs(from urls: [URL]) -> ExpandedImportURLs {
+        var expandedURLs: [URL] = []
+        var rejectedCount = 0
+        var scannedFolderCount = 0
+
+        for url in urls {
+            let standardizedURL = url.standardizedFileURL
+
+            guard standardizedURL.isFileURL else {
+                rejectedCount += 1
+                continue
+            }
+
+            if isDirectory(standardizedURL) {
+                scannedFolderCount += 1
+                expandedURLs.append(contentsOf: mp4Files(in: standardizedURL))
+            } else if standardizedURL.pathExtension.caseInsensitiveCompare("mp4") == .orderedSame {
+                expandedURLs.append(standardizedURL)
+            } else {
+                rejectedCount += 1
+            }
+        }
+
+        let uniqueSortedURLs = Array(Set(expandedURLs.map(\.standardizedFileURL)))
+            .sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+
+        return ExpandedImportURLs(
+            urls: uniqueSortedURLs,
+            rejectedCount: rejectedCount,
+            scannedFolderCount: scannedFolderCount
+        )
+    }
+
+    private static func isDirectory(_ url: URL) -> Bool {
+        guard let values = try? url.resourceValues(forKeys: [
+            .isDirectoryKey,
+            .isReadableKey,
+            .isSymbolicLinkKey,
+        ]) else {
+            return false
+        }
+
+        return values.isDirectory == true &&
+            values.isReadable == true &&
+            values.isSymbolicLink != true
+    }
+
+    private static func mp4Files(in folderURL: URL) -> [URL] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: folderURL,
+            includingPropertiesForKeys: [
+                .isDirectoryKey,
+                .isReadableKey,
+                .isRegularFileKey,
+                .isSymbolicLinkKey,
+            ],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else {
+            return []
+        }
+
+        var files: [URL] = []
+
+        for case let fileURL as URL in enumerator {
+            if let values = try? fileURL.resourceValues(forKeys: [
+                .isDirectoryKey,
+                .isSymbolicLinkKey,
+            ]),
+               values.isDirectory == true {
+                if values.isSymbolicLink == true {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+
+            guard fileURL.pathExtension.caseInsensitiveCompare("mp4") == .orderedSame,
+                  MediaFileImportValidator.validatedImport(fileURL) != nil else {
+                continue
+            }
+
+            files.append(fileURL.standardizedFileURL)
+        }
+
+        return files
+    }
 }
 
 struct MediaFileIdentity: Equatable, Sendable {
@@ -778,5 +1345,12 @@ enum MediaFileImportValidator {
         }
 
         return nil
+    }
+}
+
+private extension String {
+    var trimmedNilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

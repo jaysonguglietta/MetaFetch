@@ -29,6 +29,8 @@ struct MediaSearchResult: Hashable, Identifiable, Sendable {
     let longDescription: String?
     let contentAdvisoryRating: String?
     let artworkURL: URL?
+    let sortTitle: String?
+    let sortSeriesName: String?
     let sourceURL: URL?
     let sourceName: String
     let matchConfidence: MatchConfidence
@@ -36,6 +38,50 @@ struct MediaSearchResult: Hashable, Identifiable, Sendable {
     let matchScore: Int
     let seasonNumber: Int?
     let episodeNumber: Int?
+
+    init(
+        trackId: Int,
+        mediaKind: MediaSearchKind,
+        trackName: String,
+        seriesName: String?,
+        artistName: String?,
+        releaseDate: String?,
+        primaryGenreName: String?,
+        shortDescription: String?,
+        longDescription: String?,
+        contentAdvisoryRating: String?,
+        artworkURL: URL?,
+        sortTitle: String? = nil,
+        sortSeriesName: String? = nil,
+        sourceURL: URL?,
+        sourceName: String,
+        matchConfidence: MatchConfidence,
+        matchSummary: String,
+        matchScore: Int,
+        seasonNumber: Int?,
+        episodeNumber: Int?
+    ) {
+        self.trackId = trackId
+        self.mediaKind = mediaKind
+        self.trackName = trackName
+        self.seriesName = seriesName
+        self.artistName = artistName
+        self.releaseDate = releaseDate
+        self.primaryGenreName = primaryGenreName
+        self.shortDescription = shortDescription
+        self.longDescription = longDescription
+        self.contentAdvisoryRating = contentAdvisoryRating
+        self.artworkURL = artworkURL
+        self.sortTitle = sortTitle
+        self.sortSeriesName = sortSeriesName
+        self.sourceURL = sourceURL
+        self.sourceName = sourceName
+        self.matchConfidence = matchConfidence
+        self.matchSummary = matchSummary
+        self.matchScore = matchScore
+        self.seasonNumber = seasonNumber
+        self.episodeNumber = episodeNumber
+    }
 
     var id: Int {
         trackId
@@ -121,6 +167,8 @@ struct MediaSearchResult: Hashable, Identifiable, Sendable {
             longDescription: longDescription,
             contentAdvisoryRating: contentAdvisoryRating,
             artworkURL: artworkURL,
+            sortTitle: sortTitle,
+            sortSeriesName: sortSeriesName,
             sourceURL: sourceURL,
             sourceName: sourceName,
             matchConfidence: matchConfidence,
@@ -138,15 +186,332 @@ protocol MediaSearchServing: Sendable {
 
 struct MetadataCatalogSearchService: MediaSearchServing {
     private let movieService = WikimediaMovieSearchService()
+    private let alternateMovieService = AlternateMovieProviderSearchService()
     private let tvService = TVMazeSearchService()
 
     func search(matching query: String, mode: MediaLibraryMode) async throws -> [MediaSearchResult] {
         switch mode {
         case .movie:
-            return try await movieService.searchMovies(matching: query)
+            async let primaryResults = searchPrimaryMovies(matching: query)
+            async let alternateResults = alternateMovieService.searchMovies(matching: query)
+
+            return await prioritizedMovieResults(primaryResults + alternateResults)
         case .tvShow:
             return try await tvService.searchTV(matching: query)
         }
+    }
+
+    private func searchPrimaryMovies(matching query: String) async -> [MediaSearchResult] {
+        (try? await movieService.searchMovies(matching: query)) ?? []
+    }
+
+    private func prioritizedMovieResults(_ results: [MediaSearchResult]) -> [MediaSearchResult] {
+        let preferredSource = MetadataProviderPreferences.preferredProviderSource
+        return results.sorted { lhs, rhs in
+            let lhsScore = lhs.matchScore + preferredSource.priorityBonus(for: lhs.sourceName)
+            let rhsScore = rhs.matchScore + preferredSource.priorityBonus(for: rhs.sourceName)
+            if lhsScore == rhsScore {
+                return lhs.trackName.localizedStandardCompare(rhs.trackName) == .orderedAscending
+            }
+
+            return lhsScore > rhsScore
+        }
+    }
+}
+
+private struct AlternateMovieProviderSearchService {
+    private let tmdbService = TMDbMovieSearchService()
+    private let omdbService = OMDbMovieSearchService()
+
+    func searchMovies(matching query: String) async -> [MediaSearchResult] {
+        async let tmdbResults = tmdbService.searchMovies(
+            matching: query,
+            apiKey: MetadataProviderPreferences.tmdbAPIKey
+        )
+        async let omdbResults = omdbService.searchMovies(
+            matching: query,
+            apiKey: MetadataProviderPreferences.omdbAPIKey
+        )
+
+        return await (tmdbResults + omdbResults)
+            .sorted { lhs, rhs in lhs.matchScore > rhs.matchScore }
+    }
+}
+
+private struct TMDbMovieSearchService {
+    private struct SearchResponse: Decodable {
+        let results: [Movie]
+    }
+
+    private struct Movie: Decodable {
+        let id: Int
+        let title: String
+        let releaseDate: String?
+        let overview: String?
+        let posterPath: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case title
+            case releaseDate = "release_date"
+            case overview
+            case posterPath = "poster_path"
+        }
+    }
+
+    func searchMovies(matching query: String, apiKey: String) async -> [MediaSearchResult] {
+        let apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sanitizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !apiKey.isEmpty, !sanitizedQuery.isEmpty else {
+            return []
+        }
+
+        var components = URLComponents(string: "https://api.themoviedb.org/3/search/movie")
+        components?.queryItems = [
+            URLQueryItem(name: "api_key", value: apiKey),
+            URLQueryItem(name: "query", value: sanitizedQuery),
+            URLQueryItem(name: "include_adult", value: "false"),
+            URLQueryItem(name: "language", value: "en-US"),
+            URLQueryItem(name: "page", value: "1"),
+        ]
+
+        guard let url = components?.url else {
+            return []
+        }
+
+        do {
+            let response: SearchResponse = try await performRequest(url, decoding: SearchResponse.self)
+            let expectedYear = extractYear(from: sanitizedQuery)
+            let normalizedQuery = normalizedTitle(from: sanitizedQuery)
+
+            return response.results
+                .prefix(10)
+                .map {
+                    buildResult(
+                        from: $0,
+                        normalizedQuery: normalizedQuery,
+                        expectedYear: expectedYear
+                    )
+                }
+        } catch {
+            return []
+        }
+    }
+
+    private func buildResult(
+        from movie: Movie,
+        normalizedQuery: String,
+        expectedYear: String?
+    ) -> MediaSearchResult {
+        let releaseDate = movie.releaseDate.map { "\($0)T00:00:00Z" }
+        let posterURL = movie.posterPath.flatMap { URL(string: "https://image.tmdb.org/t/p/w500\($0)") }
+        let sourceURL = URL(string: "https://www.themoviedb.org/movie/\(movie.id)")
+
+        let provisionalResult = MediaSearchResult(
+            trackId: 1_000_000_000 + movie.id,
+            mediaKind: .movie,
+            trackName: movie.title,
+            seriesName: nil,
+            artistName: nil,
+            releaseDate: releaseDate,
+            primaryGenreName: nil,
+            shortDescription: movie.overview,
+            longDescription: movie.overview,
+            contentAdvisoryRating: nil,
+            artworkURL: posterURL,
+            sourceURL: sourceURL,
+            sourceName: "TMDb",
+            matchConfidence: .possible,
+            matchSummary: "TMDb movie result",
+            matchScore: 0,
+            seasonNumber: nil,
+            episodeNumber: nil
+        )
+
+        let evaluation = evaluateProviderMatch(
+            provisionalResult,
+            normalizedQuery: normalizedQuery,
+            expectedYear: expectedYear,
+            sourceBonus: 28
+        )
+
+        return provisionalResult.withMatchEvaluation(evaluation)
+    }
+
+    private func performRequest<Response: Decodable>(_ url: URL, decoding type: Response.Type) async throws -> Response {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = BoundedJSONRequest.timeoutInterval
+        request.setValue("MetaFetch/1.1", forHTTPHeaderField: "User-Agent")
+
+        let (data, response) = try await BoundedJSONRequest.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200..<300).contains(httpResponse.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+
+        return try JSONDecoder().decode(Response.self, from: data)
+    }
+}
+
+private struct OMDbMovieSearchService {
+    private struct SearchResponse: Decodable {
+        let Search: [SearchHit]?
+        let Response: String
+    }
+
+    private struct SearchHit: Decodable {
+        let Title: String
+        let Year: String
+        let imdbID: String
+        let Poster: String
+    }
+
+    private struct DetailResponse: Decodable {
+        let Title: String?
+        let Year: String?
+        let Rated: String?
+        let Genre: String?
+        let Director: String?
+        let Plot: String?
+        let Poster: String?
+        let imdbID: String?
+        let Response: String
+    }
+
+    func searchMovies(matching query: String, apiKey: String) async -> [MediaSearchResult] {
+        let apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sanitizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !apiKey.isEmpty, !sanitizedQuery.isEmpty else {
+            return []
+        }
+
+        var components = URLComponents(string: "https://www.omdbapi.com/")
+        components?.queryItems = [
+            URLQueryItem(name: "apikey", value: apiKey),
+            URLQueryItem(name: "s", value: sanitizedQuery),
+            URLQueryItem(name: "type", value: "movie"),
+            URLQueryItem(name: "r", value: "json"),
+        ]
+
+        guard let url = components?.url else {
+            return []
+        }
+
+        do {
+            let response: SearchResponse = try await performRequest(url, decoding: SearchResponse.self)
+            guard response.Response.lowercased() == "true" else {
+                return []
+            }
+
+            let details = await fetchDetails(
+                for: Array((response.Search ?? []).prefix(8)),
+                apiKey: apiKey
+            )
+            let expectedYear = extractYear(from: sanitizedQuery)
+            let normalizedQuery = normalizedTitle(from: sanitizedQuery)
+
+            return details.map {
+                buildResult(
+                    from: $0,
+                    normalizedQuery: normalizedQuery,
+                    expectedYear: expectedYear
+                )
+            }
+        } catch {
+            return []
+        }
+    }
+
+    private func fetchDetails(for hits: [SearchHit], apiKey: String) async -> [DetailResponse] {
+        await withTaskGroup(of: DetailResponse?.self) { group in
+            for hit in hits {
+                group.addTask {
+                    var components = URLComponents(string: "https://www.omdbapi.com/")
+                    components?.queryItems = [
+                        URLQueryItem(name: "apikey", value: apiKey),
+                        URLQueryItem(name: "i", value: hit.imdbID),
+                        URLQueryItem(name: "plot", value: "full"),
+                        URLQueryItem(name: "r", value: "json"),
+                    ]
+
+                    guard let url = components?.url else {
+                        return nil
+                    }
+
+                    return try? await performRequest(url, decoding: DetailResponse.self)
+                }
+            }
+
+            var details: [DetailResponse] = []
+            for await detail in group {
+                if let detail, detail.Response.lowercased() == "true" {
+                    details.append(detail)
+                }
+            }
+
+            return details
+        }
+    }
+
+    private func buildResult(
+        from detail: DetailResponse,
+        normalizedQuery: String,
+        expectedYear: String?
+    ) -> MediaSearchResult {
+        let title = detail.Title?.trimmedNilIfBlank ?? "Untitled OMDb Result"
+        let releaseDate = detail.Year?.firstMatch(for: #"\b(19|20)\d{2}\b"#).map { "\($0)-01-01T00:00:00Z" }
+        let artworkURL = detail.Poster.flatMap { $0 == "N/A" ? nil : URL(string: $0) }
+        let imdbID = detail.imdbID ?? ""
+        let sourceURL = imdbID.isEmpty ? nil : URL(string: "https://www.imdb.com/title/\(imdbID)/")
+
+        let provisionalResult = MediaSearchResult(
+            trackId: 2_000_000_000 + numericIMDbID(imdbID),
+            mediaKind: .movie,
+            trackName: title,
+            seriesName: nil,
+            artistName: detail.Director?.nilIfNA,
+            releaseDate: releaseDate,
+            primaryGenreName: detail.Genre?.nilIfNA,
+            shortDescription: detail.Plot?.nilIfNA,
+            longDescription: detail.Plot?.nilIfNA,
+            contentAdvisoryRating: detail.Rated?.nilIfNA,
+            artworkURL: artworkURL,
+            sourceURL: sourceURL,
+            sourceName: "OMDb",
+            matchConfidence: .possible,
+            matchSummary: "OMDb movie result",
+            matchScore: 0,
+            seasonNumber: nil,
+            episodeNumber: nil
+        )
+
+        let evaluation = evaluateProviderMatch(
+            provisionalResult,
+            normalizedQuery: normalizedQuery,
+            expectedYear: expectedYear,
+            sourceBonus: 24
+        )
+
+        return provisionalResult.withMatchEvaluation(evaluation)
+    }
+
+    private func numericIMDbID(_ imdbID: String) -> Int {
+        let digits = imdbID.filter(\.isNumber)
+        return Int(digits.suffix(8)) ?? abs(imdbID.hashValue % 100_000_000)
+    }
+
+    private func performRequest<Response: Decodable>(_ url: URL, decoding type: Response.Type) async throws -> Response {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = BoundedJSONRequest.timeoutInterval
+        request.setValue("MetaFetch/1.1", forHTTPHeaderField: "User-Agent")
+
+        let (data, response) = try await BoundedJSONRequest.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200..<300).contains(httpResponse.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+
+        return try JSONDecoder().decode(Response.self, from: data)
     }
 }
 
@@ -1036,6 +1401,35 @@ private extension Array where Element: Hashable {
     }
 }
 
+private extension MediaSearchResult {
+    func withMatchEvaluation(
+        _ evaluation: (score: Int, confidence: MatchConfidence, summary: String)
+    ) -> MediaSearchResult {
+        MediaSearchResult(
+            trackId: trackId,
+            mediaKind: mediaKind,
+            trackName: trackName,
+            seriesName: seriesName,
+            artistName: artistName,
+            releaseDate: releaseDate,
+            primaryGenreName: primaryGenreName,
+            shortDescription: shortDescription,
+            longDescription: longDescription,
+            contentAdvisoryRating: contentAdvisoryRating,
+            artworkURL: artworkURL,
+            sortTitle: sortTitle,
+            sortSeriesName: sortSeriesName,
+            sourceURL: sourceURL,
+            sourceName: sourceName,
+            matchConfidence: evaluation.confidence,
+            matchSummary: evaluation.summary,
+            matchScore: evaluation.score,
+            seasonNumber: seasonNumber,
+            episodeNumber: episodeNumber
+        )
+    }
+}
+
 private extension Optional where Wrapped == String {
     var trimmedNilIfBlank: String? {
         guard let value = self?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
@@ -1050,6 +1444,15 @@ private extension String {
     var trimmedNilIfBlank: String? {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    var nilIfNA: String? {
+        guard let trimmed = trimmedNilIfBlank,
+              trimmed.uppercased() != "N/A" else {
+            return nil
+        }
+
+        return trimmed
     }
 
     func firstMatch(for pattern: String) -> String? {
@@ -1120,12 +1523,102 @@ private func normalizedTitle(from text: String) -> String {
         .trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
+private func extractYear(from text: String?) -> String? {
+    text?.firstMatch(for: #"\b(19|20)\d{2}\b"#)
+}
+
 private func normalizedImageName(_ text: String) -> String {
     text
         .lowercased()
         .replacingOccurrences(of: "_", with: " ")
         .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
         .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func evaluateProviderMatch(
+    _ result: MediaSearchResult,
+    normalizedQuery: String,
+    expectedYear: String?,
+    sourceBonus: Int
+) -> (score: Int, confidence: MatchConfidence, summary: String) {
+    let normalizedResultTitle = normalizedTitle(from: result.trackName)
+    let hasSearchTitle = !normalizedQuery.isEmpty
+    var score = sourceBonus
+
+    let exactTitle = hasSearchTitle && normalizedResultTitle == normalizedQuery
+    let partialTitle = hasSearchTitle && !exactTitle && (
+        normalizedResultTitle.contains(normalizedQuery)
+        || normalizedQuery.contains(normalizedResultTitle)
+    )
+
+    if exactTitle {
+        score += 120
+    } else if partialTitle {
+        score += 60
+    }
+
+    let combinedText = [
+        result.trackName,
+        result.shortDescription,
+        result.longDescription,
+        result.primaryGenreName,
+        result.artistName,
+    ]
+    .compactMap { $0?.lowercased() }
+    .joined(separator: " ")
+
+    let yearMatches: Bool
+    if let expectedYear,
+       result.releaseYear == expectedYear || combinedText.contains(expectedYear) {
+        score += 25
+        yearMatches = true
+    } else {
+        yearMatches = false
+    }
+
+    if result.artworkURL != nil {
+        score += 8
+    }
+
+    if result.longDescription.trimmedNilIfBlank != nil || result.shortDescription.trimmedNilIfBlank != nil {
+        score += 10
+    }
+
+    if result.artistName.trimmedNilIfBlank != nil {
+        score += 6
+    }
+
+    if result.primaryGenreName.trimmedNilIfBlank != nil {
+        score += 6
+    }
+
+    let confidence: MatchConfidence
+    if exactTitle && yearMatches {
+        confidence = .exact
+    } else if exactTitle && score >= 140 {
+        confidence = .exact
+    } else if score >= 95 {
+        confidence = .strong
+    } else {
+        confidence = .possible
+    }
+
+    let summary: String
+    if exactTitle && yearMatches {
+        summary = "Exact \(result.sourceName) title and year match"
+    } else if exactTitle {
+        summary = "Exact \(result.sourceName) title match"
+    } else if partialTitle && yearMatches {
+        summary = "Strong \(result.sourceName) title match with matching year"
+    } else if partialTitle {
+        summary = "Strong \(result.sourceName) title match"
+    } else if yearMatches {
+        summary = "\(result.sourceName) result with matching year"
+    } else {
+        summary = "Possible \(result.sourceName) movie result"
+    }
+
+    return (score, confidence, summary)
 }
 
 private enum BoundedJSONRequest {

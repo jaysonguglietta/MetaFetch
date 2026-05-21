@@ -7,6 +7,8 @@ struct ContentView: View {
     @State private var isSidebarVisible = true
     @State private var isHelpPresented = false
     @State private var isUpdatePresented = false
+    @State private var isProviderSettingsPresented = false
+    @State private var isAdvancedPreferencesPresented = false
     @State private var isStartOverConfirmationPresented = false
 
     var body: some View {
@@ -33,12 +35,38 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .fileImporter(
             isPresented: $model.isFileImporterPresented,
-            allowedContentTypes: [.mpeg4Movie],
+            allowedContentTypes: [.mpeg4Movie, .folder],
             allowsMultipleSelection: true
         ) { result in
             switch result {
             case .success(let urls):
                 model.importFiles(from: urls)
+            case .failure(let error):
+                model.noticeMessage = error.localizedDescription
+            }
+        }
+        .fileImporter(
+            isPresented: $model.isFolderImporterPresented,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case .success(let urls):
+                model.importFiles(from: urls)
+            case .failure(let error):
+                model.noticeMessage = error.localizedDescription
+            }
+        }
+        .fileImporter(
+            isPresented: $model.isWatchFolderImporterPresented,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    model.startWatchingFolder(url)
+                }
             case .failure(let error):
                 model.noticeMessage = error.localizedDescription
             }
@@ -49,15 +77,19 @@ struct ContentView: View {
                     isSidebarVisible.toggle()
                 }
                 .keyboardShortcut("s", modifiers: [.command, .option])
+                .accessibilityHint(isSidebarVisible ? "Hides the file list sidebar." : "Shows the file list sidebar.")
 
                 Button("Help", systemImage: "questionmark.circle") {
                     isHelpPresented = true
                 }
+                .accessibilityHint("Opens MetaFetch workflow help.")
 
                 Button("Updates", systemImage: "arrow.down.circle") {
                     presentUpdateCheck()
                 }
                 .disabled(model.updateState.isBusy)
+                .help(updateControlHelp)
+                .accessibilityHint(updateControlHelp)
 
                 if let selectedMode = model.selectedMode, model.canChooseMode {
                     Menu(selectedMode.displayName) {
@@ -89,6 +121,15 @@ struct ContentView: View {
                     model.isFileImporterPresented = true
                 }
                 .disabled(model.selectedMode == nil)
+                .help(addFilesControlHelp)
+                .accessibilityHint(addFilesControlHelp)
+
+                Button("Add Season Folder", systemImage: "folder.badge.plus") {
+                    model.isFolderImporterPresented = true
+                }
+                .disabled(model.selectedMode == nil)
+                .help(folderControlHelp)
+                .accessibilityHint(folderControlHelp)
 
                 Button(model.saveAllButtonTitle, systemImage: "square.and.arrow.down") {
                     Task {
@@ -96,6 +137,51 @@ struct ContentView: View {
                     }
                 }
                 .disabled(!model.canSaveAnyTaggedFiles || model.isBatchBusy)
+                .help(saveAllControlHelp)
+                .accessibilityHint(saveAllControlHelp)
+
+                if model.lastSaveReport != nil {
+                    Button("Report", systemImage: "checklist") {
+                        model.presentedSaveReport = model.lastSaveReport
+                    }
+                    .help("Reopens the latest save report.")
+                    .accessibilityHint("Reopens the latest save report.")
+                }
+
+                Menu {
+                    Toggle("Create Safety Backups", isOn: $model.createSafetyBackups)
+
+                    Divider()
+
+                    Button("Metadata Providers") {
+                        isProviderSettingsPresented = true
+                    }
+
+                    Button("Advanced Preferences") {
+                        isAdvancedPreferencesPresented = true
+                    }
+
+                    Button(model.isWatchingFolder ? "Stop Watch Folder" : "Watch Folder") {
+                        if model.isWatchingFolder {
+                            model.stopWatchingFolder()
+                        } else {
+                            model.isWatchFolderImporterPresented = true
+                        }
+                    }
+                    .disabled(model.selectedMode == nil && !model.isWatchingFolder)
+
+                    Button("Clear Completed") {
+                        model.clearCompletedFiles()
+                    }
+                    .disabled(model.batchSavedCount == 0)
+
+                    Button("Add Season Folder") {
+                        model.isFolderImporterPresented = true
+                    }
+                    .disabled(model.selectedMode == nil)
+                } label: {
+                    Label("Options", systemImage: "slider.horizontal.3")
+                }
             }
         }
         .sheet(isPresented: $isHelpPresented) {
@@ -103,6 +189,15 @@ struct ContentView: View {
         }
         .sheet(isPresented: $isUpdatePresented) {
             UpdateView(model: model)
+        }
+        .sheet(isPresented: $isProviderSettingsPresented) {
+            ProviderSettingsView(model: model)
+        }
+        .sheet(isPresented: $isAdvancedPreferencesPresented) {
+            AdvancedPreferencesView(model: model)
+        }
+        .sheet(item: $model.presentedSaveReport) { report in
+            SaveReportView(model: model, report: report)
         }
         .onReceive(NotificationCenter.default.publisher(for: .showMetaFetchHelp)) { _ in
             isHelpPresented = true
@@ -132,6 +227,36 @@ struct ContentView: View {
             await model.checkForUpdates()
         }
     }
+
+    private var updateControlHelp: String {
+        model.updateState.isBusy
+        ? "MetaFetch is already checking for updates."
+        : "Checks GitHub Releases for a newer MetaFetch version."
+    }
+
+    private var addFilesControlHelp: String {
+        model.selectedMode == nil
+        ? "Choose Movie or TV Show before importing MP4 files."
+        : "Opens a file picker for local MP4 files or folders."
+    }
+
+    private var folderControlHelp: String {
+        model.selectedMode == nil
+        ? "Choose Movie or TV Show before importing a folder."
+        : "Imports writable MP4 files from a folder and its subfolders."
+    }
+
+    private var saveAllControlHelp: String {
+        if model.isBatchBusy {
+            return "Wait for the current TV batch operation to finish before saving."
+        }
+
+        if !model.canSaveAnyTaggedFiles {
+            return "Select at least one metadata match before saving files."
+        }
+
+        return "Saves metadata for every file with a selected match."
+    }
 }
 
 private struct SidebarView: View {
@@ -159,6 +284,19 @@ private struct SidebarView: View {
                         accent: RetroTheme.lime
                     )
                 }
+
+                Picker("Queue Filter", selection: $model.queueFilter) {
+                    ForEach(FileQueueFilter.allCases) { filter in
+                        Text(filter.label).tag(filter)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(RetroTheme.cyan)
+                .help("Filters the loaded file queue without removing files.")
+
+                Text(model.queueFilterSummary)
+                    .font(RetroTheme.bodyFont(12))
+                    .foregroundStyle(RetroTheme.muted)
             }
             .padding(20)
             .retroPanel(accent: RetroTheme.magenta)
@@ -175,13 +313,13 @@ private struct SidebarView: View {
             }
 
             List(selection: $model.selectedFileID) {
-                ForEach(model.files) { entry in
+                ForEach(model.filteredFiles) { entry in
                     SidebarRow(entry: entry)
                         .tag(entry.id)
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                 }
-                .onDelete(perform: model.removeFiles)
+                .onDelete(perform: model.removeFilteredFiles)
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
@@ -247,6 +385,8 @@ private struct TVBatchPanel: View {
                 }
                 .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.cyan))
                 .disabled(model.files.isEmpty || model.isBatchBusy)
+                .help(searchAllHelp)
+                .accessibilityHint(searchAllHelp)
 
                 Button(model.saveAllButtonTitle) {
                     Task {
@@ -255,10 +395,36 @@ private struct TVBatchPanel: View {
                 }
                 .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.lime))
                 .disabled(!model.canSaveAnyTaggedFiles || model.isBatchBusy)
+                .help(saveAllHelp)
+                .accessibilityHint(saveAllHelp)
             }
         }
         .padding(16)
         .retroPanel(accent: RetroTheme.cyan)
+    }
+
+    private var searchAllHelp: String {
+        if model.files.isEmpty {
+            return "Drop TV episode MP4 files before searching the batch."
+        }
+
+        if model.isBatchBusy {
+            return "Wait for the current TV batch operation to finish."
+        }
+
+        return "Searches metadata for every loaded TV episode."
+    }
+
+    private var saveAllHelp: String {
+        if model.isBatchBusy {
+            return "Wait for the current TV batch operation to finish before saving."
+        }
+
+        if !model.canSaveAnyTaggedFiles {
+            return "Select metadata matches for one or more episodes before saving."
+        }
+
+        return "Saves metadata for every ready episode."
     }
 }
 
@@ -523,10 +689,14 @@ private struct ModeChoiceCard: View {
 
             Button("Choose \(mode.displayName)", action: choose)
                 .buttonStyle(RetroPrimaryButtonStyle(accent: mode == .movie ? RetroTheme.gold : RetroTheme.cyan))
+                .accessibilityHint("Starts the \(mode.displayName) tagging workflow.")
         }
         .padding(22)
         .frame(maxWidth: .infinity, alignment: .leading)
         .retroPanel(accent: mode == .movie ? RetroTheme.gold : RetroTheme.cyan)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(mode.displayName) tagging workflow")
+        .accessibilityHint(mode.modePickerDetail)
     }
 }
 
@@ -665,9 +835,17 @@ private struct TVBatchWorkspaceView: View {
         VStack(alignment: .leading, spacing: 12) {
             tableTitle(
                 eyebrow: "Episode List",
-                title: "\(model.files.count) Loaded",
+                title: "\(model.filteredFiles.count) Shown",
                 accent: RetroTheme.magenta
             )
+
+            Picker("Queue Filter", selection: $model.queueFilter) {
+                ForEach(FileQueueFilter.allCases) { filter in
+                    Text(filter.label).tag(filter)
+                }
+            }
+            .pickerStyle(.menu)
+            .tint(RetroTheme.cyan)
 
             HStack(spacing: 0) {
                 tableHeader("EP", width: 52, alignment: .center)
@@ -681,7 +859,7 @@ private struct TVBatchWorkspaceView: View {
 
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(Array(model.files.enumerated()), id: \.element.id) { index, entry in
+                    ForEach(Array(model.filteredFiles.enumerated()), id: \.element.id) { index, entry in
                         BatchEpisodeRow(
                             index: index + 1,
                             entry: entry,
@@ -975,20 +1153,58 @@ private struct TVBatchWorkspaceView: View {
                 )
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("\(tab.title) batch tab")
+        .accessibilityHint("Shows the \(tab.title.lowercased()) tools for the TV batch.")
     }
 }
 
 private struct BatchSeasonsPane: View {
     @ObservedObject var model: AppModel
 
-    private var seasonGroups: [(season: Int, entries: [MovieFileEntry])] {
+    private struct SeasonGroup: Hashable {
+        let showTitle: String
+        let season: Int
+        let entries: [MovieFileEntry]
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(showTitle)
+            hasher.combine(season)
+        }
+
+        static func == (lhs: SeasonGroup, rhs: SeasonGroup) -> Bool {
+            lhs.showTitle == rhs.showTitle && lhs.season == rhs.season
+        }
+    }
+
+    private var seasonGroups: [SeasonGroup] {
         let grouped = Dictionary(grouping: model.files) { entry in
-            entry.selectedResult?.seasonNumber ?? entry.parsedCurrentQuery.seasonNumber ?? 0
+            let showTitle = (entry.selectedResult?.seriesName ?? entry.parsedCurrentQuery.title)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalizedShow = showTitle.isEmpty ? "Unknown Show" : showTitle
+            let season = entry.selectedResult?.seasonNumber ?? entry.parsedCurrentQuery.seasonNumber ?? 0
+            return "\(normalizedShow.lowercased())|\(season)"
         }
 
         return grouped
-            .map { (season: $0.key, entries: $0.value) }
+            .map { _, entries in
+                let firstEntry = entries.first
+                let showTitle = (firstEntry?.selectedResult?.seriesName ?? firstEntry?.parsedCurrentQuery.title ?? "Unknown Show")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let season = firstEntry?.selectedResult?.seasonNumber ?? firstEntry?.parsedCurrentQuery.seasonNumber ?? 0
+                return SeasonGroup(
+                    showTitle: showTitle.isEmpty ? "Unknown Show" : showTitle,
+                    season: season,
+                    entries: entries.sorted { lhs, rhs in
+                        (lhs.selectedResult?.episodeNumber ?? lhs.parsedCurrentQuery.episodeNumber ?? 0) <
+                            (rhs.selectedResult?.episodeNumber ?? rhs.parsedCurrentQuery.episodeNumber ?? 0)
+                    }
+                )
+            }
             .sorted { left, right in
+                if left.showTitle.localizedStandardCompare(right.showTitle) != .orderedSame {
+                    return left.showTitle.localizedStandardCompare(right.showTitle) == .orderedAscending
+                }
+
                 if left.season == 0 {
                     return false
                 }
@@ -1010,10 +1226,10 @@ private struct BatchSeasonsPane: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(seasonGroups, id: \.season) { group in
+                    ForEach(seasonGroups, id: \.self) { group in
                         VStack(alignment: .leading, spacing: 10) {
                             RetroPill(
-                                text: group.season == 0 ? "Unknown Season" : "Season \(group.season)",
+                                text: group.season == 0 ? "\(group.showTitle) • Unknown Season" : "\(group.showTitle) • Season \(group.season)",
                                 accent: RetroTheme.cyan
                             )
 
@@ -1125,6 +1341,8 @@ private struct BatchDataPane: View {
                     .padding(16)
                     .retroPanel(accent: RetroTheme.paper.opacity(0.16))
 
+                    MetadataEditorCard(entry: entry)
+
                     DownloadedDetailsPanel(result: selectedResult)
                 }
 
@@ -1210,6 +1428,8 @@ private struct BatchEpisodeMatchChoiceRow: View {
             .background(rowBackground)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("\(result.trackName), \(result.matchSummary)")
+        .accessibilityHint(isSelected ? "This episode match is selected." : "Selects this episode match for the current file.")
     }
 
     private var rowBackground: some ShapeStyle {
@@ -1396,6 +1616,8 @@ private struct BatchEpisodeRow: View {
             .background(rowBackground)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("\(entry.filename), \(entry.batchReviewLabel)")
+        .accessibilityHint("Selects this episode in the batch workspace.")
     }
 
     private var rowBackground: some ShapeStyle {
@@ -1499,6 +1721,8 @@ private struct BatchSearchResultRow: View {
             .background(rowBackground)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("\(result.trackName), \(result.releaseYear ?? "unknown year"), \(result.matchSummary)")
+        .accessibilityHint("Applies this series match to every loaded episode.")
     }
 
     private var rowBackground: some ShapeStyle {
@@ -1703,6 +1927,12 @@ private struct FileWorkspaceView: View {
     private var previewPanel: some View {
         SelectionPreviewCard(
             entry: entry,
+            safetyBackupsEnabled: model.createSafetyBackups,
+            inspectHeadroomAction: {
+                Task {
+                    await model.inspectHeadroom(for: entry)
+                }
+            },
             saveAction: {
                 Task {
                     await model.save(file: entry)
@@ -1846,6 +2076,9 @@ private struct DropZoneCard: View {
 
             return !providers.isEmpty
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(compact ? "Drop more MP4 files" : mode.dragTitle)
+        .accessibilityHint("Drop local MP4 files here or use Choose Files.")
     }
 }
 
@@ -1860,6 +2093,8 @@ private struct SearchResultCard: View {
                 cardContent
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("\(result.trackName), \(result.mediaKind.label), \(result.matchSummary)")
+            .accessibilityHint(isSelected ? "This match is selected." : "Selects this metadata match.")
 
             if let sourceURL = result.sourceURL {
                 Link(destination: sourceURL) {
@@ -1869,6 +2104,7 @@ private struct SearchResultCard: View {
                         .foregroundStyle(RetroTheme.cyan)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Open source details for \(result.trackName)")
             }
         }
         .padding(18)
@@ -1944,8 +2180,348 @@ private struct SearchResultCard: View {
     }
 }
 
+private struct MetadataEditorCard: View {
+    @ObservedObject var entry: MovieFileEntry
+    @State private var isArtworkImporterPresented = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center) {
+                RetroPill(text: "Manual Edit", accent: RetroTheme.magenta)
+
+                Spacer()
+
+                if let selectedResult = entry.selectedResult {
+                    Button("Reset") {
+                        entry.metadataDraft.reset(to: selectedResult)
+                    }
+                    .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.paper.opacity(0.18)))
+                    .disabled(entry.isSaving)
+                    .help("Restores the metadata fields from the selected source result.")
+                }
+            }
+
+            Text("Adjust the tags that will be written before saving. Edits apply only to this file.")
+                .font(RetroTheme.bodyFont(13))
+                .foregroundStyle(RetroTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 10) {
+                editorField("Title", text: $entry.metadataDraft.title, required: true)
+
+                if entry.mediaMode == .tvShow {
+                    editorField("Series", text: $entry.metadataDraft.seriesName)
+
+                    HStack(spacing: 10) {
+                        editorField("Season", text: $entry.metadataDraft.seasonNumber)
+                        editorField("Episode", text: $entry.metadataDraft.episodeNumber)
+                    }
+                }
+
+                HStack(spacing: 10) {
+                    editorField(entry.selectedResult?.creatorLabel ?? "Creator", text: $entry.metadataDraft.creator)
+                    editorField("Genre", text: $entry.metadataDraft.genre)
+                }
+
+                editorField("Year", text: $entry.metadataDraft.year)
+
+                editorField("Sort Title", text: $entry.metadataDraft.sortTitle)
+
+                if entry.mediaMode == .tvShow {
+                    editorField("Sort Series", text: $entry.metadataDraft.sortSeriesName)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Description".uppercased())
+                        .font(RetroTheme.labelFont(10))
+                        .tracking(1.8)
+                        .foregroundStyle(RetroTheme.paper.opacity(0.68))
+
+                    TextEditor(text: $entry.metadataDraft.synopsis)
+                        .font(RetroTheme.bodyFont(13))
+                        .foregroundStyle(RetroTheme.paper)
+                        .scrollContentBackground(.hidden)
+                        .frame(minHeight: 92)
+                        .padding(8)
+                        .background(Color.black.opacity(0.22))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(RetroTheme.paper.opacity(0.12), lineWidth: 1)
+                        )
+                        .disabled(entry.isSaving)
+                        .accessibilityLabel("Description")
+                }
+            }
+
+            if !entry.metadataDraft.isValid(for: entry.selectedResult) {
+                Text("A title is required before MetaFetch can save this file.")
+                    .font(RetroTheme.bodyFont(12))
+                    .foregroundStyle(RetroTheme.gold)
+            }
+
+            Divider()
+                .overlay(RetroTheme.paper.opacity(0.14))
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Poster Override".uppercased())
+                    .font(RetroTheme.labelFont(10))
+                    .tracking(1.8)
+                    .foregroundStyle(RetroTheme.paper.opacity(0.68))
+
+                Text(entry.customArtworkURL?.lastPathComponent ?? "Using source artwork unless you choose a custom image.")
+                    .font(RetroTheme.bodyFont(12))
+                    .foregroundStyle(RetroTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 10) {
+                    Button("Choose Poster") {
+                        isArtworkImporterPresented = true
+                    }
+                    .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+                    .disabled(entry.isSaving)
+
+                    if entry.customArtworkURL != nil {
+                        Button("Clear Poster") {
+                            entry.customArtworkURL = nil
+                        }
+                        .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.paper.opacity(0.18)))
+                        .disabled(entry.isSaving)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .retroPanel(accent: RetroTheme.magenta)
+        .fileImporter(
+            isPresented: $isArtworkImporterPresented,
+            allowedContentTypes: [.image],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                entry.customArtworkURL = urls.first?.standardizedFileURL
+                entry.headroomInspection = nil
+            case .failure(let error):
+                entry.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func editorField(
+        _ label: String,
+        text: Binding<String>,
+        required: Bool = false
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text((required ? "\(label) *" : label).uppercased())
+                .font(RetroTheme.labelFont(10))
+                .tracking(1.8)
+                .foregroundStyle(RetroTheme.paper.opacity(0.68))
+
+            TextField(label, text: text)
+                .textFieldStyle(.plain)
+                .font(RetroTheme.bodyFont(13))
+                .foregroundStyle(RetroTheme.paper)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 9)
+                .background(Color.black.opacity(0.22))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(RetroTheme.paper.opacity(0.12), lineWidth: 1)
+                )
+                .disabled(entry.isSaving)
+                .accessibilityLabel(label)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct MetadataDiffCard: View {
+    @ObservedObject var entry: MovieFileEntry
+
+    var body: some View {
+        if let selectedResult = entry.selectedResult {
+            let rows = diffRows(for: selectedResult)
+
+            VStack(alignment: .leading, spacing: 12) {
+                RetroPill(text: "Tag Preview Diff", accent: RetroTheme.cyan)
+
+                Text("Provider value on top, final value to save underneath. This is the last sanity check before MetaFetch writes tags.")
+                    .font(RetroTheme.bodyFont(12))
+                    .foregroundStyle(RetroTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(spacing: 8) {
+                    ForEach(rows, id: \.label) { row in
+                        HStack(alignment: .top, spacing: 10) {
+                            Text(row.label.uppercased())
+                                .font(RetroTheme.labelFont(10))
+                                .tracking(1.7)
+                                .foregroundStyle(RetroTheme.cyan)
+                                .frame(width: 88, alignment: .leading)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(row.before)
+                                    .font(RetroTheme.bodyFont(12))
+                                    .foregroundStyle(RetroTheme.muted)
+                                    .lineLimit(2)
+
+                                Text(row.after)
+                                    .font(RetroTheme.bodyFont(13))
+                                    .foregroundStyle(row.changed ? RetroTheme.gold : RetroTheme.paper)
+                                    .lineLimit(2)
+                            }
+
+                            Spacer()
+
+                            if row.changed {
+                                InfoBadge(text: "Changed", accent: RetroTheme.gold, foreground: RetroTheme.ink)
+                            }
+                        }
+                        .padding(10)
+                        .background(Color.black.opacity(0.16))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                }
+            }
+            .padding(14)
+            .retroPanel(accent: RetroTheme.cyan)
+        }
+    }
+
+    private func diffRows(for result: MediaSearchResult) -> [DiffRow] {
+        let draft = entry.metadataDraft
+        return [
+            DiffRow(label: "Title", before: result.trackName, after: draft.title),
+            DiffRow(label: "Sort", before: result.sortTitle ?? result.trackName, after: draft.sortTitle),
+            DiffRow(label: "Series", before: result.seriesName ?? "Not provided", after: displayValue(draft.seriesName)),
+            DiffRow(label: "Sort Show", before: result.sortSeriesName ?? result.seriesName ?? "Not provided", after: displayValue(draft.sortSeriesName)),
+            DiffRow(label: "Episode", before: result.seasonEpisodeLabel ?? "Not provided", after: draftEpisodeCode),
+            DiffRow(label: "Genre", before: result.primaryGenreName ?? "Not provided", after: displayValue(draft.genre)),
+            DiffRow(label: "Year", before: result.releaseYear ?? "Not provided", after: displayValue(draft.year)),
+            DiffRow(label: result.creatorLabel, before: result.creatorValue ?? "Not provided", after: displayValue(draft.creator)),
+        ]
+    }
+
+    private func displayValue(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Not provided" : trimmed
+    }
+
+    private var draftEpisodeCode: String {
+        guard let season = Int(entry.metadataDraft.seasonNumber),
+              let episode = Int(entry.metadataDraft.episodeNumber) else {
+            return "Not provided"
+        }
+
+        return String(format: "S%02dE%02d", season, episode)
+    }
+
+    private struct DiffRow {
+        let label: String
+        let before: String
+        let after: String
+
+        var changed: Bool {
+            normalized(before) != normalized(after)
+        }
+
+        private func normalized(_ value: String) -> String {
+            value.trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                .lowercased()
+        }
+    }
+}
+
+private struct HeadroomInspectionCard: View {
+    @ObservedObject var entry: MovieFileEntry
+    let safetyBackupsEnabled: Bool
+    let inspectAction: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(alignment: .center) {
+                RetroPill(text: "Save Path", accent: accent)
+                Spacer()
+                if entry.willSaveArtwork {
+                    Button(entry.isInspectingHeadroom ? "Checking..." : "Check Poster Headroom") {
+                        inspectAction()
+                    }
+                    .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+                    .disabled(entry.isSaving || entry.isInspectingHeadroom)
+                }
+            }
+
+            if let outcome = entry.lastSaveOutcome {
+                MetadataLine(label: "Last Save", value: outcome.path.label)
+            }
+
+            MetadataLine(label: "Safety Backups", value: safetyBackupsEnabled ? "On" : "Off")
+
+            if entry.isInspectingHeadroom {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .tint(RetroTheme.gold)
+
+                    Text("Inspecting MP4 metadata headroom...")
+                        .font(RetroTheme.bodyFont(13))
+                        .foregroundStyle(RetroTheme.paper)
+                }
+            } else if let inspection = entry.headroomInspection {
+                Text(inspection.headline)
+                    .font(RetroTheme.labelFont(13))
+                    .foregroundStyle(accent)
+
+                Text(inspection.detail)
+                    .font(RetroTheme.bodyFont(12))
+                    .foregroundStyle(RetroTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let reservedBytes = inspection.reservedBytes,
+                   let requiredBytes = inspection.requiredBytes {
+                    MetadataLine(
+                        label: "Reserved / Needed",
+                        value: "\(Self.byteCount(reservedBytes)) / \(Self.byteCount(requiredBytes))"
+                    )
+                }
+            } else {
+                Text(entry.headroomSummary)
+                    .font(RetroTheme.bodyFont(12))
+                    .foregroundStyle(RetroTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .retroPanel(accent: accent)
+    }
+
+    private var accent: Color {
+        guard let status = entry.headroomInspection?.status else {
+            return entry.willSaveArtwork ? RetroTheme.gold : RetroTheme.lime
+        }
+
+        switch status {
+        case .enough:
+            return RetroTheme.lime
+        case .needsRewrite:
+            return RetroTheme.gold
+        case .unavailable:
+            return RetroTheme.magenta
+        }
+    }
+
+    private static func byteCount(_ value: UInt64) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(value), countStyle: .file)
+    }
+}
+
 private struct SelectionPreviewCard: View {
     @ObservedObject var entry: MovieFileEntry
+    let safetyBackupsEnabled: Bool
+    let inspectHeadroomAction: () -> Void
     let saveAction: () -> Void
 
     var body: some View {
@@ -1988,6 +2564,15 @@ private struct SelectionPreviewCard: View {
                     .font(RetroTheme.bodyFont(14))
                     .foregroundStyle(match.matchConfidence.accent)
 
+                if !entry.providerDiagnostics.isEmpty {
+                    Text(entry.providerDiagnostics)
+                        .font(RetroTheme.bodyFont(12))
+                        .foregroundStyle(RetroTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(12)
+                        .retroPanel(accent: RetroTheme.paper.opacity(0.16))
+                }
+
                 if let sourceURL = match.sourceURL {
                     Link(destination: sourceURL) {
                         Label("Open Source Details", systemImage: "safari")
@@ -2017,6 +2602,10 @@ private struct SelectionPreviewCard: View {
                     MetadataLine(label: "Artwork", value: entry.artworkChoiceSummary)
                 }
 
+                MetadataEditorCard(entry: entry)
+
+                MetadataDiffCard(entry: entry)
+
                 VStack(alignment: .leading, spacing: 2) {
                     Text(entry.hasSelectedArtwork ? "Poster Artwork Included" : "No Poster Artwork Available")
                         .font(RetroTheme.labelFont(13))
@@ -2026,6 +2615,18 @@ private struct SelectionPreviewCard: View {
                         .font(RetroTheme.bodyFont(12))
                         .foregroundStyle(RetroTheme.muted)
                 }
+
+                Toggle("Save poster artwork for this file", isOn: $entry.posterSavingEnabled)
+                    .font(RetroTheme.bodyFont(13))
+                    .foregroundStyle(RetroTheme.paper)
+                    .disabled(!entry.hasSelectedArtwork || entry.isSaving)
+                    .help(entry.hasSelectedArtwork ? "Controls whether poster artwork is written during this save." : "No poster artwork is available for this file.")
+
+                HeadroomInspectionCard(
+                    entry: entry,
+                    safetyBackupsEnabled: safetyBackupsEnabled,
+                    inspectAction: inspectHeadroomAction
+                )
 
                 if entry.isSeriesOnlySelectionForEpisodeQuery {
                     VStack(alignment: .leading, spacing: 10) {
@@ -2062,6 +2663,7 @@ private struct SelectionPreviewCard: View {
                 }
                 .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.lime))
                 .disabled(!entry.canSave)
+                .accessibilityHint("Writes the selected metadata to \(entry.filename).")
 
                 if entry.isSaving {
                     VStack(alignment: .leading, spacing: 10) {
@@ -2069,6 +2671,8 @@ private struct SelectionPreviewCard: View {
                             ProgressView(value: saveProgress)
                                 .progressViewStyle(.linear)
                                 .tint(RetroTheme.lime)
+                                .accessibilityLabel("Save progress")
+                                .accessibilityValue(entry.saveProgressLabel)
 
                             HStack {
                                 Text(entry.statusMessage)
@@ -2156,9 +2760,9 @@ private struct HelpView: View {
                         accent: RetroTheme.cyan,
                         rows: [
                             "Choose Movie or TV Show before importing.",
-                            "Drop one or more MP4 files or use Add MP4 Files.",
+                            "Drop one or more MP4 files, use Add MP4 Files, or import a season folder.",
                             "Review the suggested search query and search again if needed.",
-                            "Pick the best result card, then save metadata back to the MP4.",
+                            "Pick the best result card, edit fields if needed, then save metadata back to the MP4.",
                         ]
                     )
 
@@ -2169,6 +2773,7 @@ private struct HelpView: View {
                             "Movie filenames work best when they include a clean title and year, like The.Matrix.1999.mp4.",
                             "TV filenames work best with season and episode codes, like Severance.S02E04.mp4 or Severance.2x04.mp4.",
                             "If a filename is messy, edit the search box directly and search again.",
+                            "Use Options > Metadata Providers to add optional TMDb or OMDb keys for broader movie coverage.",
                             "Use Open Source when two matches look similar and you want to confirm the source page.",
                         ]
                     )
@@ -2180,6 +2785,7 @@ private struct HelpView: View {
                             "Filenames like Show.Name.S01E03.mp4 and Show.Name.2x07.mp4 are detected automatically.",
                             "If the filename is generic, folder names help. For example: Severance/Season 2/Episode 04.mp4.",
                             "For a few episodes from the same show, drop them together and use the batch workspace to search the show once.",
+                            "For larger seasons, use Add Season Folder to recursively queue writable MP4 files.",
                             "Clicking a show card applies that show to every file while preserving each detected episode code.",
                             "A Series Only badge means MetaFetch found the show, but not a specific episode yet.",
                             "Add or edit an episode code like S02E04 in the search field for exact episode tags.",
@@ -2202,9 +2808,35 @@ private struct HelpView: View {
                         accent: RetroTheme.gold,
                         rows: [
                             "MetaFetch first writes Apple/iTunes-style MP4 metadata atoms directly into the movie header when possible.",
+                            "Use Manual Edit to adjust title, sort title, series, sort series, genre, year, season, episode, creator, description, and custom poster before saving.",
+                            "Use Check Poster Headroom before artwork saves to estimate whether a fast header update is likely.",
                             "Batch saves keep poster artwork on when the selected source provides it.",
                             "Saving with poster artwork may rebuild the MP4 container, but video/audio are not re-encoded.",
-                            "The progress bar tracks the current save path and shows when MetaFetch falls back.",
+                            "The save report shows the actual write path, duration, poster state, failures, and backup files, then exports CSV or JSON or retries failed rows.",
+                            "Use Advanced Preferences for poster defaults, safety backups, provider priority, watch folders, and rename-after-save templates.",
+                        ]
+                    )
+
+                    HelpSection(
+                        title: "Metadata Providers",
+                        accent: RetroTheme.magenta,
+                        rows: [
+                            "Wikipedia/Wikimedia powers default movie search and TVMaze powers TV search without any setup.",
+                            "TMDb and OMDb are optional movie providers. Add your own keys in Options > Metadata Providers when you want extra movie matches.",
+                            "Provider keys are stored locally in Keychain and are not bundled into releases or shared with GitHub.",
+                            "Advanced Preferences can boost Wikipedia, TMDb, or OMDb in movie result ranking without hiding other sources.",
+                            "If a provider key is blank, MetaFetch simply skips that provider and keeps searching with the remaining sources.",
+                        ]
+                    )
+
+                    HelpSection(
+                        title: "Advanced Workflow",
+                        accent: RetroTheme.gold,
+                        rows: [
+                            "Use queue filters to focus exact matches, needs-review rows, series-only rows, saved files, failures, or files with posters.",
+                            "Use Tag Preview Diff to compare provider metadata with the final edited tags before writing.",
+                            "Enable rename-after-save templates to produce clean filenames after verified saves.",
+                            "Use Watch Folder to poll a folder and queue newly added writable MP4 files automatically.",
                         ]
                     )
 
@@ -2226,8 +2858,9 @@ private struct HelpView: View {
                             "No matches usually means the query is too noisy. Try a shorter title or add the release year.",
                             "Series Only in TV mode means MetaFetch found the show but still needs a specific episode code.",
                             "For multi-episode tagging, search the show once in the batch workspace, click the right show card, review the badges, then Save All Tagged + Posters.",
-                            "If saving is slow, turn off poster artwork so MetaFetch can try the metadata-only fast path.",
+                            "If saving is slow, check poster headroom or turn off poster artwork so MetaFetch can try the metadata-only fast path.",
                             "If MetaFetch says a file changed after import, remove that row and add the MP4 again before saving.",
+                            "If a folder imports nothing, confirm it contains local writable MP4 files and is not a symlink.",
                             "If the layout feels cramped, hide the sidebar or widen the app window before reviewing poster cards.",
                         ]
                     )
@@ -2247,10 +2880,10 @@ private struct HelpView: View {
                         title: "Good Next Upgrades",
                         accent: RetroTheme.gold,
                         rows: [
-                            "An optional safety mode could create recovery backups for users who prefer protection over fastest saves.",
-                            "A manual metadata editor would let you tweak title, synopsis, genre, and artwork before saving.",
-                            "A batch save report could show which files used header-only saves versus container rebuilds.",
-                            "A headroom inspector could explain why a file will or will not save quickly before you click Save.",
+                            "Add deeper provider diagnostics for timeouts, rate limits, and provider-specific errors.",
+                            "Read existing MP4 metadata for a true current-tags versus new-tags diff.",
+                            "Add a tagging history log for files processed across sessions.",
+                            "Add a signed Sparkle updater for fully automatic app replacement.",
                         ]
                     )
                 }
@@ -2456,6 +3089,476 @@ private struct UpdateView: View {
     }
 }
 
+private struct ProviderSettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var model: AppModel
+    @State private var showsKeys = false
+
+    var body: some View {
+        ZStack {
+            RetroBackdrop()
+
+            VStack(alignment: .leading, spacing: 24) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        MetaFetchLogoLockup(
+                            markSize: 44,
+                            wordmarkSize: 28,
+                            subtitle: "source mixer"
+                        )
+
+                        Text("Metadata Providers")
+                            .font(RetroTheme.heroFont(38))
+                            .foregroundStyle(RetroTheme.paper)
+
+                        Text("Wikipedia and TVMaze always stay enabled. Add optional movie provider keys when you want broader poster and release coverage.")
+                            .font(RetroTheme.bodyFont(16))
+                            .foregroundStyle(RetroTheme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer()
+
+                    Button("Close") {
+                        dismiss()
+                    }
+                    .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+                }
+
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(spacing: 10) {
+                        providerStatus(
+                            title: "TMDb",
+                            isEnabled: providerKeyIsSet(model.tmdbAPIKey)
+                        )
+
+                        providerStatus(
+                            title: "OMDb",
+                            isEnabled: providerKeyIsSet(model.omdbAPIKey)
+                        )
+
+                        Spacer()
+
+                        Toggle("Show Keys", isOn: $showsKeys)
+                            .font(RetroTheme.bodyFont(13))
+                            .foregroundStyle(RetroTheme.paper)
+                    }
+
+                    providerKeyField(
+                        title: "TMDb API Key",
+                        description: "Used for optional movie search results and TMDb poster URLs. Leave blank to skip TMDb.",
+                        text: $model.tmdbAPIKey
+                    )
+
+                    providerKeyField(
+                        title: "OMDb API Key",
+                        description: "Used for optional IMDb-backed movie details such as director, rating, genre, plot, and poster.",
+                        text: $model.omdbAPIKey
+                    )
+                }
+                .padding(20)
+                .retroPanel(accent: RetroTheme.cyan)
+
+                HStack {
+                    Button("Clear Provider Keys") {
+                        model.tmdbAPIKey = ""
+                        model.omdbAPIKey = ""
+                    }
+                    .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.paper.opacity(0.18)))
+                    .disabled(model.tmdbAPIKey.isEmpty && model.omdbAPIKey.isEmpty)
+
+                    Spacer()
+
+                    Button("Save Settings") {
+                        dismiss()
+                    }
+                    .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.lime))
+                }
+            }
+            .padding(28)
+        }
+        .preferredColorScheme(.dark)
+        .frame(minWidth: 700, minHeight: 560)
+    }
+
+    private func providerStatus(title: String, isEnabled: Bool) -> some View {
+        InfoBadge(
+            text: "\(title) \(isEnabled ? "On" : "Off")",
+            accent: isEnabled ? RetroTheme.lime : RetroTheme.paper.opacity(0.18),
+            foreground: isEnabled ? RetroTheme.ink : RetroTheme.paper
+        )
+    }
+
+    private func providerKeyIsSet(_ value: String) -> Bool {
+        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func providerKeyField(
+        title: String,
+        description: String,
+        text: Binding<String>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title.uppercased())
+                .font(RetroTheme.labelFont(11))
+                .tracking(2.2)
+                .foregroundStyle(RetroTheme.cyan)
+
+            Text(description)
+                .font(RetroTheme.bodyFont(13))
+                .foregroundStyle(RetroTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            keyInput(title: title, text: text)
+                .textFieldStyle(.plain)
+                .font(RetroTheme.bodyFont(14))
+                .foregroundStyle(RetroTheme.paper)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 11)
+                .background(Color.black.opacity(0.22))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(RetroTheme.paper.opacity(0.12), lineWidth: 1)
+                )
+                .accessibilityLabel(title)
+        }
+    }
+
+    @ViewBuilder
+    private func keyInput(title: String, text: Binding<String>) -> some View {
+        if showsKeys {
+            TextField(title, text: text)
+        } else {
+            SecureField(title, text: text)
+        }
+    }
+}
+
+private struct AdvancedPreferencesView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var model: AppModel
+    @State private var isWatchFolderImporterPresented = false
+
+    var body: some View {
+        ZStack {
+            RetroBackdrop()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            MetaFetchLogoLockup(
+                                markSize: 44,
+                                wordmarkSize: 28,
+                                subtitle: "power deck"
+                            )
+
+                            Text("Advanced Preferences")
+                                .font(RetroTheme.heroFont(38))
+                                .foregroundStyle(RetroTheme.paper)
+
+                            Text("Keep the main workflow simple, but tune speed, artwork, provider priority, batch automation, watch folders, and file naming here.")
+                                .font(RetroTheme.bodyFont(16))
+                                .foregroundStyle(RetroTheme.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Spacer()
+
+                        Button("Close") {
+                            dismiss()
+                        }
+                        .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+                    }
+
+                    preferenceSection(title: "Save Defaults", accent: RetroTheme.lime) {
+                        Toggle("Save poster artwork by default", isOn: $model.posterSavingDefault)
+                        Toggle("Create safety backups before writing", isOn: $model.createSafetyBackups)
+
+                        Text("Poster saving can still be changed per file. Safety backups trade speed for a recoverable sidecar copy.")
+                            .font(RetroTheme.bodyFont(12))
+                            .foregroundStyle(RetroTheme.muted)
+                    }
+
+                    preferenceSection(title: "Provider Priority", accent: RetroTheme.cyan) {
+                        Picker("Preferred movie provider", selection: $model.preferredProviderSource) {
+                            ForEach(MetadataProviderSource.allCases) { source in
+                                Text(source.label).tag(source)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        Text("Provider priority gives matching results from your preferred source a scoring boost without hiding other sources.")
+                            .font(RetroTheme.bodyFont(12))
+                            .foregroundStyle(RetroTheme.muted)
+                    }
+
+                    preferenceSection(title: "TV Batch Rules", accent: RetroTheme.magenta) {
+                        Toggle("Auto-apply a clear exact show match", isOn: $model.autoApplyClearTVBatchMatches)
+
+                        Text("When enabled, a clear exact show result immediately drives all loaded episode searches while preserving each episode code.")
+                            .font(RetroTheme.bodyFont(12))
+                            .foregroundStyle(RetroTheme.muted)
+                    }
+
+                    preferenceSection(title: "Rename After Tagging", accent: RetroTheme.gold) {
+                        Toggle("Rename files after successful save", isOn: $model.renameAfterSave)
+
+                        TextField("Movie template", text: $model.movieRenameTemplate)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("TV template", text: $model.tvRenameTemplate)
+                            .textFieldStyle(.roundedBorder)
+
+                        Text("Tokens: {title}, {sort_title}, {series}, {sort_series}, {year}, {season}, {episode}, {season_episode}. Existing files get a safe numeric suffix.")
+                            .font(RetroTheme.bodyFont(12))
+                            .foregroundStyle(RetroTheme.muted)
+                    }
+
+                    preferenceSection(title: "Watch Folder", accent: RetroTheme.cyan) {
+                        Text(model.watchFolderSummary)
+                            .font(RetroTheme.bodyFont(13))
+                            .foregroundStyle(RetroTheme.paper)
+
+                        HStack(spacing: 10) {
+                            Button(model.isWatchingFolder ? "Stop Watching" : "Choose Watch Folder") {
+                                if model.isWatchingFolder {
+                                    model.stopWatchingFolder()
+                                } else {
+                                    isWatchFolderImporterPresented = true
+                                }
+                            }
+                            .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.cyan))
+                            .disabled(model.selectedMode == nil && !model.isWatchingFolder)
+
+                            if model.isWatchingFolder {
+                                Button("Scan Now") {
+                                    model.scanWatchedFolder()
+                                }
+                                .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+                            }
+                        }
+                    }
+                }
+                .padding(28)
+            }
+        }
+        .preferredColorScheme(.dark)
+        .frame(minWidth: 760, minHeight: 720)
+        .fileImporter(
+            isPresented: $isWatchFolderImporterPresented,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    model.startWatchingFolder(url)
+                }
+            case .failure(let error):
+                model.noticeMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func preferenceSection<Content: View>(
+        title: String,
+        accent: Color,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            RetroSectionTitle(eyebrow: "Advanced", title: title, accent: accent)
+
+            VStack(alignment: .leading, spacing: 12) {
+                content()
+            }
+            .font(RetroTheme.bodyFont(14))
+            .foregroundStyle(RetroTheme.paper)
+        }
+        .padding(18)
+        .retroPanel(accent: accent)
+    }
+}
+
+private struct SaveReportView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var model: AppModel
+    let report: SaveReport
+    @State private var exportError: String?
+
+    var body: some View {
+        ZStack {
+            RetroBackdrop()
+
+            VStack(alignment: .leading, spacing: 22) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        MetaFetchLogoLockup(
+                            markSize: 44,
+                            wordmarkSize: 28,
+                            subtitle: "save report"
+                        )
+
+                        Text("Save Report")
+                            .font(RetroTheme.heroFont(38))
+                            .foregroundStyle(RetroTheme.paper)
+
+                        Text(report.summary)
+                            .font(RetroTheme.bodyFont(16))
+                            .foregroundStyle(RetroTheme.muted)
+                    }
+
+                    Spacer()
+
+                    Button("Close") {
+                        dismiss()
+                    }
+                    .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+                }
+
+                HStack(spacing: 10) {
+                    SidebarStat(label: "Verified", value: "\(report.successCount)", accent: RetroTheme.lime)
+                    SidebarStat(label: "Failed", value: "\(report.failureCount)", accent: report.failureCount == 0 ? RetroTheme.cyan : RetroTheme.gold)
+                    SidebarStat(label: "Files", value: "\(report.entries.count)", accent: RetroTheme.magenta)
+                }
+
+                HStack(spacing: 10) {
+                    Button("Retry Failed") {
+                        Task {
+                            await model.retryFailedSaves(from: report)
+                        }
+                    }
+                    .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.magenta))
+                    .disabled(report.failureCount == 0 || model.isBatchBusy)
+
+                    Button("Retry Without Posters") {
+                        Task {
+                            await model.retryFailedSaves(from: report, includeArtwork: false)
+                        }
+                    }
+                    .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+                    .disabled(report.failureCount == 0 || model.isBatchBusy)
+
+                    Button("Export CSV") {
+                        export(data: report.csvData(), suggestedName: "MetaFetch Save Report.csv")
+                    }
+                    .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.cyan))
+
+                    Button("Export JSON") {
+                        do {
+                            try export(data: report.jsonData(), suggestedName: "MetaFetch Save Report.json")
+                        } catch {
+                            exportError = error.localizedDescription
+                        }
+                    }
+                    .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+
+                    if let exportError {
+                        Text(exportError)
+                            .font(RetroTheme.bodyFont(12))
+                            .foregroundStyle(RetroTheme.gold)
+                    }
+
+                    Spacer()
+                }
+
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        ForEach(report.entries) { entry in
+                            SaveReportRow(entry: entry)
+                        }
+                    }
+                }
+                .frame(minHeight: 360)
+            }
+            .padding(28)
+        }
+        .preferredColorScheme(.dark)
+        .frame(minWidth: 760, minHeight: 620)
+    }
+
+    private func export(data: Data, suggestedName: String) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = suggestedName
+        panel.canCreateDirectories = true
+
+        guard panel.runModal() == .OK,
+              let url = panel.url else {
+            return
+        }
+
+        do {
+            try data.write(to: url, options: [.atomic])
+            exportError = nil
+        } catch {
+            exportError = error.localizedDescription
+        }
+    }
+}
+
+private struct SaveReportRow: View {
+    let entry: SaveReportEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: entry.didSucceed ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(entry.didSucceed ? RetroTheme.lime : RetroTheme.gold)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(entry.filename)
+                        .font(RetroTheme.heroFont(22))
+                        .foregroundStyle(RetroTheme.paper)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text(entry.title)
+                        .font(RetroTheme.bodyFont(14))
+                        .foregroundStyle(RetroTheme.muted)
+                }
+
+                Spacer()
+
+                RetroPill(text: entry.statusLabel, accent: entry.didSucceed ? RetroTheme.lime : RetroTheme.gold)
+            }
+
+            VStack(alignment: .leading, spacing: 7) {
+                MetadataLine(label: "Save Path", value: entry.pathLabel)
+                MetadataLine(label: "Duration", value: entry.durationLabel)
+
+                if let outcome = entry.outcome {
+                    MetadataLine(label: "Detail", value: outcome.path.detail)
+                    MetadataLine(label: "Poster", value: outcome.includedArtwork ? "Included" : "Not included")
+
+                    if let backupURL = outcome.backupURL {
+                        MetadataLine(label: "Backup", value: backupURL.lastPathComponent)
+                    }
+                }
+
+                if let errorMessage = entry.errorMessage {
+                    MetadataLine(label: "Error", value: errorMessage)
+                }
+            }
+
+            HStack(spacing: 10) {
+                Button("Reveal File") {
+                    NSWorkspace.shared.activateFileViewerSelecting([entry.fileURL])
+                }
+                .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.cyan))
+
+                if let backupURL = entry.outcome?.backupURL {
+                    Button("Reveal Backup") {
+                        NSWorkspace.shared.activateFileViewerSelecting([backupURL])
+                    }
+                    .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+                }
+            }
+        }
+        .padding(16)
+        .retroPanel(accent: entry.didSucceed ? RetroTheme.lime : RetroTheme.gold)
+    }
+}
+
 private struct HelpSection: View {
     let title: String
     let accent: Color
@@ -2596,6 +3699,7 @@ private struct ArtworkView: View {
                 .strokeBorder(accent.opacity(0.85), lineWidth: 2)
         )
         .shadow(color: accent.opacity(0.20), radius: 14, x: 0, y: 12)
+        .accessibilityHidden(true)
         .task(id: url) {
             await loadArtwork()
         }

@@ -6,15 +6,30 @@ MetaFetch is a native macOS SwiftUI app for tagging `.mp4` files with movie or T
 
 - Choose `Movie` or `TV Show` when the app starts.
 - Drag and drop one or more `.mp4` files, or use the file picker.
+- Import a season folder and recursively queue local writable `.mp4` files.
 - Use the TV batch workspace to show multiple episodes as a file list, search the show once, browse Series/Seasons/Data/Cover tabs, and apply choices across detected episodes.
 - Clean filenames into searchable titles automatically.
 - Detect TV episode codes like `S01E03` and `2x07`.
 - Use folder context for TV files like `Severance/Season 2/Episode 04.mp4`.
 - Review match confidence, result source, and source page links before saving.
+- Edit title, sort title, series, sort series, season/episode numbers, genre, year, creator, and description before saving.
+- Override provider artwork with a custom local poster image before saving.
 - Download movie and TV episode details/descriptions, then write title, synopsis, genre, artwork, and movie or episode-specific metadata back to Apple/iTunes-style MP4 atoms.
+- Check MP4 metadata headroom before poster saves to see whether a fast header update or container rewrite is likely.
 - Use a native MP4 atom writer first, then fall back to AVFoundation only when the file layout requires it.
 - Verify saved metadata by reading the MP4 back after writing, then fall back if a fast save does not stick.
-- Prioritize speed by writing without creating sidecar safety backups.
+- Prioritize speed by writing without creating sidecar safety backups by default.
+- Optionally enable safety backups when protection matters more than speed.
+- Review save reports showing which files verified, failed, included posters, used fast metadata-only saves, or required rewrites.
+- Export save reports as CSV or JSON.
+- Group folder and season imports by detected show and season in the TV batch workspace.
+- Add optional TMDb and OMDb movie provider keys for broader movie search coverage.
+- Store optional provider keys locally in macOS Keychain.
+- Tune advanced preferences for poster defaults, provider priority, safety backups, TV batch auto-apply, watch folders, and rename-after-save templates.
+- Filter loaded files by exact matches, review state, series-only matches, saved files, failures, or poster availability.
+- Retry failed save report rows, including a faster retry-without-posters path.
+- Preview provider metadata versus the final edited tags before writing.
+- Optionally rename files after verified saves using movie or TV filename templates.
 - Check GitHub Releases for newer versions, download an installer asset, and reveal it in Finder for user-confirmed installation.
 - Re-check imported file identity before saving so MetaFetch refuses to tag a path that changed after import.
 
@@ -31,6 +46,8 @@ That path builds and opens a real `.app` bundle with the bundle identifier `com.
 ## Documentation
 
 See [User Guide](Documentation/UserGuide.md) for the full workflow, naming tips, save behavior, and troubleshooting.
+
+See [Product Blueprint](Documentation/ProductBlueprint.md) for the app goal, core workflows, key screens, data models, and edge cases.
 
 See [Feature Suggestions](Documentation/FeatureSuggestions.md) for the next product ideas worth considering.
 
@@ -106,7 +123,8 @@ For production releases, sign and notarize installer assets before attaching the
 
 ## Data Sources
 
-- Movies use Wikipedia/Wikimedia metadata and page images.
+- Movies use Wikipedia/Wikimedia metadata and page images by default.
+- Optional movie providers can be enabled with user-supplied TMDb and OMDb keys from `Options > Metadata Providers`.
 - TV shows and episodes use TVMaze metadata.
 
 Match quality depends on source coverage. Always review close matches before saving.

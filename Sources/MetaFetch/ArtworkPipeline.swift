@@ -8,6 +8,8 @@ actor ArtworkPipeline {
     private static let allowedHostSuffixes = [
         "wikimedia.org",
         "tvmaze.com",
+        "tmdb.org",
+        "media-amazon.com",
     ]
     private static let maximumArtworkBytes = 8 * 1024 * 1024
     private static let maximumCachedArtworkItems = 80
@@ -45,6 +47,15 @@ actor ArtworkPipeline {
         }
 
         let task = Task<Data?, Error>(priority: .utility) {
+            if url.isFileURL {
+                let data = try Self.loadBoundedLocalArtwork(from: url)
+                guard !data.isEmpty else {
+                    return nil
+                }
+
+                return Self.downsampledArtwork(from: data)
+            }
+
             guard Self.isAllowedArtworkURL(url) else {
                 return nil
             }
@@ -95,6 +106,38 @@ actor ArtworkPipeline {
         return allowedHostSuffixes.contains { suffix in
             host == suffix || host.hasSuffix(".\(suffix)")
         }
+    }
+
+    private static func loadBoundedLocalArtwork(from url: URL) throws -> Data {
+        let standardizedURL = url.standardizedFileURL
+        let resourceValues = try standardizedURL.resourceValues(forKeys: [
+            .fileSizeKey,
+            .isReadableKey,
+            .isRegularFileKey,
+            .isSymbolicLinkKey,
+            .contentTypeKey,
+        ])
+
+        guard standardizedURL.isFileURL,
+              resourceValues.isRegularFile == true,
+              resourceValues.isReadable == true,
+              resourceValues.isSymbolicLink != true,
+              let contentType = resourceValues.contentType,
+              contentType.conforms(to: .image) else {
+            return Data()
+        }
+
+        if let fileSize = resourceValues.fileSize,
+           fileSize > maximumArtworkBytes {
+            return Data()
+        }
+
+        let data = try Data(contentsOf: standardizedURL, options: [.mappedIfSafe])
+        guard data.count <= maximumArtworkBytes else {
+            return Data()
+        }
+
+        return data
     }
 
     private static func downloadBoundedArtwork(from url: URL) async throws -> Data {
