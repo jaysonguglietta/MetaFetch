@@ -127,11 +127,14 @@ final class AppModel: ObservableObject {
     }
     @Published var watchedFolderURL: URL?
     @Published var isWatchingFolder = false
+    @Published private(set) var providerHealthRecords: [ProviderHealthRecord] = ProviderHealthHistory.records()
+    @Published private(set) var taggingHistoryRecords: [TaggingHistoryRecord] = TaggingHistoryStore.records()
 
     private let searchService: MediaSearchServing
     private let metadataWriter: MetadataWriting
     private let updateService: AppUpdateChecking
     private let headroomInspector: MP4HeadroomInspecting
+    private let currentMetadataReader = MP4CurrentMetadataReader()
     private var watchFolderTimer: Timer?
 
     init(
@@ -325,6 +328,9 @@ final class AppModel: ObservableObject {
             Task {
                 await search(file: entry)
             }
+            Task {
+                await loadCurrentMetadata(for: entry)
+            }
         }
     }
 
@@ -379,7 +385,8 @@ final class AppModel: ObservableObject {
         file.statusMessage = searchStatusMessage(for: file.mediaMode, query: query)
 
         do {
-            let results = try await searchService.search(matching: query, mode: file.mediaMode)
+            let searchResponse = try await searchResponse(matching: query, mode: file.mediaMode)
+            let results = searchResponse.results
             guard file.searchGeneration == searchGeneration else {
                 return
             }
@@ -394,7 +401,8 @@ final class AppModel: ObservableObject {
             let previousSelectionID = file.selectedResult?.id
             let preservedSelection: MediaSearchResult?
             file.searchResults = results
-            file.providerDiagnostics = providerDiagnosticSummary(for: results, mode: file.mediaMode)
+            file.providerDiagnostics = providerDiagnosticSummary(for: searchResponse, mode: file.mediaMode)
+            recordProviderDiagnostics(searchResponse.diagnostics)
             file.isSearching = false
 
             if let previousSelectionID,
@@ -473,6 +481,27 @@ final class AppModel: ObservableObject {
         file.headroomInspection = inspection
         file.isInspectingHeadroom = false
         file.statusMessage = inspection.headline
+    }
+
+    func resetProviderHealthHistory() {
+        ProviderHealthHistory.reset()
+        providerHealthRecords = []
+    }
+
+    func resetTaggingHistory() {
+        TaggingHistoryStore.reset()
+        taggingHistoryRecords = []
+    }
+
+    private func loadCurrentMetadata(for file: MovieFileEntry) async {
+        do {
+            let snapshot = try await currentMetadataReader.read(from: file.fileURL)
+            file.currentMetadataSnapshot = snapshot.hasReadableValues ? snapshot : nil
+            file.currentMetadataError = nil
+        } catch {
+            file.currentMetadataSnapshot = nil
+            file.currentMetadataError = error.localizedDescription
+        }
     }
 
     private func saveAndBuildReportEntry(
@@ -574,6 +603,16 @@ final class AppModel: ObservableObject {
             file.saveProgress = 1
             file.lastSavedAt = Date()
             file.lastSaveOutcome = outcome
+            file.currentMetadataSnapshot = MP4CurrentMetadataSnapshot(
+                result: resultForWriting,
+                hasArtwork: includeArtwork
+            )
+            file.currentMetadataError = nil
+            recordTaggingHistory(
+                file: file,
+                result: resultForWriting,
+                outcome: outcome
+            )
             let renameMessage = renameSavedFileIfNeeded(file: file, result: resultForWriting)
             file.importIdentity = MediaFileImportValidator.identity(for: file.fileURL)
             file.isSaving = false
@@ -673,8 +712,10 @@ final class AppModel: ObservableObject {
         batchStatusMessage = "Searching show matches for “\(query)”"
 
         do {
-            let results = try await searchService.search(matching: query, mode: .tvShow)
+            let searchResponse = try await searchResponse(matching: query, mode: .tvShow)
+            let results = searchResponse.results
             batchSearchResults = results
+            recordProviderDiagnostics(searchResponse.diagnostics)
             selectedBatchResult = SearchSelectionPolicy.suggestedAutoSelection(from: results)
             isBatchSearching = false
 
@@ -968,7 +1009,29 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func providerDiagnosticSummary(for results: [MediaSearchResult], mode: MediaLibraryMode) -> String {
+    private func searchResponse(matching query: String, mode: MediaLibraryMode) async throws -> MetadataSearchResponse {
+        if let diagnosticSearchService = searchService as? MetadataDiagnosticSearchServing {
+            return try await diagnosticSearchService.searchWithDiagnostics(matching: query, mode: mode)
+        }
+
+        let results = try await searchService.search(matching: query, mode: mode)
+        return MetadataSearchResponse(results: results)
+    }
+
+    private func providerDiagnosticSummary(for response: MetadataSearchResponse, mode: MediaLibraryMode) -> String {
+        let results = response.results
+        if !response.diagnostics.isEmpty {
+            let prefix: String
+            switch mode {
+            case .movie:
+                prefix = "Provider priority: \(preferredProviderSource.label)."
+            case .tvShow:
+                prefix = "TV provider diagnostics."
+            }
+
+            return ([prefix] + response.diagnostics.map(\.summary)).joined(separator: " • ")
+        }
+
         switch mode {
         case .tvShow:
             return "TVMaze searched. \(results.count) result\(results.count == 1 ? "" : "s") returned."
@@ -991,6 +1054,28 @@ final class AppModel: ObservableObject {
 
             return parts.joined(separator: " • ")
         }
+    }
+
+    private func recordProviderDiagnostics(_ diagnostics: [MetadataProviderDiagnostic]) {
+        ProviderHealthHistory.record(diagnostics)
+        providerHealthRecords = ProviderHealthHistory.records()
+    }
+
+    private func recordTaggingHistory(
+        file: MovieFileEntry,
+        result: MediaSearchResult,
+        outcome: MetadataWriteOutcome
+    ) {
+        TaggingHistoryStore.record(TaggingHistoryRecord(
+            filename: file.filename,
+            filePath: file.fileURL.path,
+            title: result.trackName,
+            mode: file.mediaMode.displayName,
+            sourceName: result.sourceName,
+            writePath: outcome.path.label,
+            includedArtwork: outcome.includedArtwork
+        ))
+        taggingHistoryRecords = TaggingHistoryStore.records()
     }
 
     private func renameSavedFileIfNeeded(file: MovieFileEntry, result: MediaSearchResult) -> String? {

@@ -36,12 +36,13 @@ struct MetadataDraft: Equatable, Sendable {
             return false
         }
 
-        return !trimmedTitle.isEmpty
+        let trimmedReleaseDate = year.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmedTitle.isEmpty &&
+            (trimmedReleaseDate.isEmpty || normalizedReleaseDate(from: year, fallback: nil) != nil)
     }
 
     func applying(to result: MediaSearchResult) -> MediaSearchResult {
-        let normalizedYear = year.trimmingCharacters(in: .whitespacesAndNewlines)
-        let releaseDate = normalizedYear.isEmpty ? result.releaseDate : normalizedYear
+        let releaseDate = normalizedReleaseDate(from: year, fallback: result.releaseDate)
 
         return MediaSearchResult(
             trackId: result.trackId,
@@ -85,5 +86,26 @@ struct MetadataDraft: Equatable, Sendable {
         }
 
         return integer
+    }
+
+    private func normalizedReleaseDate(from value: String, fallback: String?) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return fallback
+        }
+
+        if trimmed.range(of: #"^\d{4}$"#, options: .regularExpression) != nil {
+            return "\(trimmed)-01-01T00:00:00Z"
+        }
+
+        if trimmed.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil {
+            return "\(trimmed)T00:00:00Z"
+        }
+
+        if ISO8601DateFormatter().date(from: trimmed) != nil {
+            return trimmed
+        }
+
+        return nil
     }
 }

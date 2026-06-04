@@ -205,7 +205,7 @@ struct MP4HeadroomInspection: Sendable {
         case .enough:
             return "This MP4 appears to have enough reserved metadata space for the selected tags and artwork."
         case .needsRewrite:
-            return "The selected metadata is larger than the reserved MP4 header space, so MetaFetch may rebuild the container without re-encoding media."
+            return "The selected metadata is larger than the reserved MP4 header space, so MetaFetch may rebuild the container without re-encoding media. For future conversions, reserve metadata room with FFmpeg: `-moov_size 16777216`."
         case .unavailable(let message):
             return message
         }

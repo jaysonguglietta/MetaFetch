@@ -33,6 +33,8 @@ final class MovieFileEntry: ObservableObject, Identifiable {
     @Published var customArtworkURL: URL?
     @Published var posterSavingEnabled = true
     @Published var metadataDraft = MetadataDraft()
+    @Published var currentMetadataSnapshot: MP4CurrentMetadataSnapshot?
+    @Published var currentMetadataError: String?
     @Published var headroomInspection: MP4HeadroomInspection?
     @Published var providerDiagnostics = ""
     @Published var isInspectingHeadroom = false

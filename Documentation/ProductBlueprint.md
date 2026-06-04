@@ -1,5 +1,7 @@
 # MetaFetch Product Blueprint
 
+For the concise target-user, problem, workflow, and done-criteria summary, see the [Product Brief](ProductBrief.md).
+
 ## App Goal
 
 MetaFetch is a polished native macOS utility for tagging local MP4 movie and TV episode files. The app should let someone drop files, search by cleaned filename or manual title, review likely matches, choose artwork/details, and write Apple/iTunes-style metadata back to the original MP4 as quickly as the container safely allows.
@@ -64,8 +66,11 @@ The first screen is the working app experience: choose `Movie` or `TV Show`, the
 - `MovieSearchService`: Network metadata lookups, provider-specific parsing, ranking, and result normalization.
 - `ArtworkPipeline`: Bounded artwork fetch, MIME and host validation, downsampling, caching, and eviction.
 - `MP4MetadataWriter`: Native MP4 atom write path, verification, and fallback container rewrite behavior.
+- `MP4CurrentMetadataReader`: Reads existing MP4 metadata atoms for true current-tags versus final-tags preview.
 - `UpdateService`: GitHub Releases version comparison, bounded asset download, and reveal-in-Finder install handoff.
 - `MetadataDraft`: Editable per-file metadata applied over the selected provider result before writing.
+- `ProviderHealthHistory`: Local searched/skipped/failed provider counters for troubleshooting.
+- `TaggingHistoryStore`: Short local list of recently verified saves.
 - `SaveReport`: Single-save and batch-save outcomes including write path, duration, poster state, errors, and backup locations.
 - `MP4HeadroomInspection`: A pre-save estimate of whether selected metadata/artwork fits in reserved MP4 header space.
 - `MetadataProviderPreferences`: Local Keychain-backed provider key preferences used to enable optional TMDb and OMDb movie search without bundling secrets.
@@ -105,8 +110,6 @@ The first screen is the working app experience: choose `Movie` or `TV Show`, the
 
 ## Future Product Enhancements
 
-- Add a true current-tag reader for current MP4 metadata versus new tag diff.
-- Add custom release date handling beyond year-only edits.
-- Add provider request telemetry for timeouts, authentication errors, rate limits, and response-size failures.
-- Add rename preset management and a lightweight tagging history log.
+- Expand current-tag reading to additional niche third-party MP4/iTunes atoms.
+- Add rename preset management for reusable library naming styles.
 - Replace the lightweight GitHub updater with a signed Sparkle appcast if fully automatic updates become a product requirement.

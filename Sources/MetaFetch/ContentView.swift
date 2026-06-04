@@ -2223,7 +2223,7 @@ private struct MetadataEditorCard: View {
                     editorField("Genre", text: $entry.metadataDraft.genre)
                 }
 
-                editorField("Year", text: $entry.metadataDraft.year)
+                editorField("Release Date", text: $entry.metadataDraft.year)
 
                 editorField("Sort Title", text: $entry.metadataDraft.sortTitle)
 
@@ -2255,7 +2255,7 @@ private struct MetadataEditorCard: View {
             }
 
             if !entry.metadataDraft.isValid(for: entry.selectedResult) {
-                Text("A title is required before MetaFetch can save this file.")
+                Text("A title is required. Release date may be blank, `YYYY`, `YYYY-MM-DD`, or a full ISO date.")
                     .font(RetroTheme.bodyFont(12))
                     .foregroundStyle(RetroTheme.gold)
             }
@@ -2343,12 +2343,24 @@ private struct MetadataDiffCard: View {
 
     var body: some View {
         if let selectedResult = entry.selectedResult {
-            let rows = diffRows(for: selectedResult)
+            let currentSnapshot = entry.currentMetadataSnapshot?.hasReadableValues == true
+                ? entry.currentMetadataSnapshot
+                : nil
+            let rows = diffRows(for: selectedResult, currentSnapshot: currentSnapshot)
 
             VStack(alignment: .leading, spacing: 12) {
-                RetroPill(text: "Tag Preview Diff", accent: RetroTheme.cyan)
+                HStack(spacing: 8) {
+                    RetroPill(text: "Tag Preview Diff", accent: RetroTheme.cyan)
+                    if currentSnapshot != nil {
+                        InfoBadge(text: "Current MP4", accent: RetroTheme.gold, foreground: RetroTheme.ink)
+                    } else if entry.currentMetadataError != nil {
+                        InfoBadge(text: "Provider Baseline", accent: RetroTheme.paper.opacity(0.2), foreground: RetroTheme.paper)
+                    }
+                }
 
-                Text("Provider value on top, final value to save underneath. This is the last sanity check before MetaFetch writes tags.")
+                Text(currentSnapshot != nil
+                    ? "Current MP4 value on top, final value to save underneath. This catches accidental overwrites before writing."
+                    : "Provider value on top, final value to save underneath. Current MP4 tags were not readable from this file.")
                     .font(RetroTheme.bodyFont(12))
                     .foregroundStyle(RetroTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -2391,18 +2403,34 @@ private struct MetadataDiffCard: View {
         }
     }
 
-    private func diffRows(for result: MediaSearchResult) -> [DiffRow] {
+    private func diffRows(
+        for result: MediaSearchResult,
+        currentSnapshot: MP4CurrentMetadataSnapshot?
+    ) -> [DiffRow] {
         let draft = entry.metadataDraft
         return [
-            DiffRow(label: "Title", before: result.trackName, after: draft.title),
-            DiffRow(label: "Sort", before: result.sortTitle ?? result.trackName, after: draft.sortTitle),
-            DiffRow(label: "Series", before: result.seriesName ?? "Not provided", after: displayValue(draft.seriesName)),
-            DiffRow(label: "Sort Show", before: result.sortSeriesName ?? result.seriesName ?? "Not provided", after: displayValue(draft.sortSeriesName)),
-            DiffRow(label: "Episode", before: result.seasonEpisodeLabel ?? "Not provided", after: draftEpisodeCode),
-            DiffRow(label: "Genre", before: result.primaryGenreName ?? "Not provided", after: displayValue(draft.genre)),
-            DiffRow(label: "Year", before: result.releaseYear ?? "Not provided", after: displayValue(draft.year)),
-            DiffRow(label: result.creatorLabel, before: result.creatorValue ?? "Not provided", after: displayValue(draft.creator)),
+            DiffRow(label: "Title", before: baseline(currentSnapshot?.title, fallback: result.trackName), after: draft.title),
+            DiffRow(label: "Sort", before: baseline(currentSnapshot?.sortTitle, fallback: result.sortTitle ?? result.trackName), after: draft.sortTitle),
+            DiffRow(label: "Series", before: baseline(currentSnapshot?.seriesName, fallback: result.seriesName), after: displayValue(draft.seriesName)),
+            DiffRow(label: "Sort Show", before: baseline(currentSnapshot?.sortSeriesName, fallback: result.sortSeriesName ?? result.seriesName), after: displayValue(draft.sortSeriesName)),
+            DiffRow(label: "Episode", before: baselineEpisode(currentSnapshot, fallback: result.seasonEpisodeLabel), after: draftEpisodeCode),
+            DiffRow(label: "Genre", before: baseline(currentSnapshot?.genre, fallback: result.primaryGenreName), after: displayValue(draft.genre)),
+            DiffRow(label: "Release", before: baseline(currentSnapshot?.year, fallback: result.releaseDate ?? result.releaseYear), after: displayValue(draft.year)),
+            DiffRow(label: result.creatorLabel, before: baseline(currentSnapshot?.creator, fallback: result.creatorValue), after: displayValue(draft.creator)),
         ]
+    }
+
+    private func baseline(_ currentValue: String?, fallback: String?) -> String {
+        displayValue(currentValue ?? fallback ?? "")
+    }
+
+    private func baselineEpisode(_ currentSnapshot: MP4CurrentMetadataSnapshot?, fallback: String?) -> String {
+        if let season = Int(currentSnapshot?.seasonNumber ?? ""),
+           let episode = Int(currentSnapshot?.episodeNumber ?? "") {
+            return String(format: "S%02dE%02d", season, episode)
+        }
+
+        return displayValue(fallback ?? "")
     }
 
     private func displayValue(_ value: String) -> String {
@@ -2808,7 +2836,7 @@ private struct HelpView: View {
                         accent: RetroTheme.gold,
                         rows: [
                             "MetaFetch first writes Apple/iTunes-style MP4 metadata atoms directly into the movie header when possible.",
-                            "Use Manual Edit to adjust title, sort title, series, sort series, genre, year, season, episode, creator, description, and custom poster before saving.",
+                            "Use Manual Edit to adjust title, sort title, series, sort series, genre, release date, season, episode, creator, description, and custom poster before saving.",
                             "Use Check Poster Headroom before artwork saves to estimate whether a fast header update is likely.",
                             "Batch saves keep poster artwork on when the selected source provides it.",
                             "Saving with poster artwork may rebuild the MP4 container, but video/audio are not re-encoded.",
@@ -2834,7 +2862,8 @@ private struct HelpView: View {
                         accent: RetroTheme.gold,
                         rows: [
                             "Use queue filters to focus exact matches, needs-review rows, series-only rows, saved files, failures, or files with posters.",
-                            "Use Tag Preview Diff to compare provider metadata with the final edited tags before writing.",
+                            "Use Tag Preview Diff to compare current MP4 tags with the final edited tags when existing tags are readable.",
+                            "Provider diagnostics show searched, skipped, failed, and no-key provider states after movie searches.",
                             "Enable rename-after-save templates to produce clean filenames after verified saves.",
                             "Use Watch Folder to poll a folder and queue newly added writable MP4 files automatically.",
                         ]
@@ -2880,9 +2909,8 @@ private struct HelpView: View {
                         title: "Good Next Upgrades",
                         accent: RetroTheme.gold,
                         rows: [
-                            "Add deeper provider diagnostics for timeouts, rate limits, and provider-specific errors.",
-                            "Read existing MP4 metadata for a true current-tags versus new-tags diff.",
-                            "Add a tagging history log for files processed across sessions.",
+                            "Add rename preset management for reusable library naming styles.",
+                            "Expand current-tag reading to additional niche third-party MP4/iTunes atoms.",
                             "Add a signed Sparkle updater for fully automatic app replacement.",
                         ]
                     )
@@ -3239,6 +3267,7 @@ private struct AdvancedPreferencesView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var model: AppModel
     @State private var isWatchFolderImporterPresented = false
+    @State private var historyExportError: String?
 
     var body: some View {
         ZStack {
@@ -3292,6 +3321,47 @@ private struct AdvancedPreferencesView: View {
                         Text("Provider priority gives matching results from your preferred source a scoring boost without hiding other sources.")
                             .font(RetroTheme.bodyFont(12))
                             .foregroundStyle(RetroTheme.muted)
+
+                        Divider()
+                            .overlay(RetroTheme.paper.opacity(0.14))
+
+                        Text("Provider Health".uppercased())
+                            .font(RetroTheme.labelFont(10))
+                            .tracking(1.8)
+                            .foregroundStyle(RetroTheme.cyan)
+
+                        if model.providerHealthRecords.isEmpty {
+                            Text("No provider health history yet. Search once to record searched, skipped, and failed provider states locally.")
+                                .font(RetroTheme.bodyFont(12))
+                                .foregroundStyle(RetroTheme.muted)
+                        } else {
+                            ForEach(model.providerHealthRecords) { record in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(record.providerName)
+                                        .font(RetroTheme.labelFont(12))
+                                        .foregroundStyle(record.failedCount > 0 ? RetroTheme.gold : RetroTheme.paper)
+
+                                    Text(record.summary)
+                                        .font(RetroTheme.bodyFont(12))
+                                        .foregroundStyle(RetroTheme.muted)
+
+                                    if !record.lastDetail.isEmpty {
+                                        Text(record.lastDetail)
+                                            .font(RetroTheme.bodyFont(11))
+                                            .foregroundStyle(RetroTheme.paper.opacity(0.72))
+                                            .lineLimit(2)
+                                    }
+                                }
+                                .padding(10)
+                                .background(Color.black.opacity(0.16))
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            }
+
+                            Button("Reset Provider Health") {
+                                model.resetProviderHealthHistory()
+                            }
+                            .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.paper.opacity(0.18)))
+                        }
                     }
 
                     preferenceSection(title: "TV Batch Rules", accent: RetroTheme.magenta) {
@@ -3313,6 +3383,50 @@ private struct AdvancedPreferencesView: View {
                         Text("Tokens: {title}, {sort_title}, {series}, {sort_series}, {year}, {season}, {episode}, {season_episode}. Existing files get a safe numeric suffix.")
                             .font(RetroTheme.bodyFont(12))
                             .foregroundStyle(RetroTheme.muted)
+                    }
+
+                    preferenceSection(title: "Tagging History", accent: RetroTheme.magenta) {
+                        if model.taggingHistoryRecords.isEmpty {
+                            Text("No saved-file history yet. Verified saves are kept locally so you can remember what was tagged recently.")
+                                .font(RetroTheme.bodyFont(12))
+                                .foregroundStyle(RetroTheme.muted)
+                        } else {
+                            ForEach(model.taggingHistoryRecords.prefix(8)) { record in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(record.title)
+                                        .font(RetroTheme.labelFont(12))
+                                        .foregroundStyle(RetroTheme.paper)
+
+                                    Text(record.filename)
+                                        .font(RetroTheme.bodyFont(12))
+                                        .foregroundStyle(RetroTheme.gold)
+                                        .lineLimit(1)
+
+                                    Text(record.summary)
+                                        .font(RetroTheme.bodyFont(11))
+                                        .foregroundStyle(RetroTheme.muted)
+                                }
+                                .padding(10)
+                                .background(Color.black.opacity(0.16))
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            }
+
+                            Button("Clear History") {
+                                model.resetTaggingHistory()
+                            }
+                            .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.paper.opacity(0.18)))
+
+                            Button("Export History CSV") {
+                                exportHistoryCSV()
+                            }
+                            .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.cyan))
+
+                            if let historyExportError {
+                                Text(historyExportError)
+                                    .font(RetroTheme.bodyFont(12))
+                                    .foregroundStyle(RetroTheme.gold)
+                            }
+                        }
                     }
 
                     preferenceSection(title: "Watch Folder", accent: RetroTheme.cyan) {
@@ -3377,6 +3491,25 @@ private struct AdvancedPreferencesView: View {
         }
         .padding(18)
         .retroPanel(accent: accent)
+    }
+
+    private func exportHistoryCSV() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "MetaFetch Tagging History.csv"
+        panel.canCreateDirectories = true
+
+        guard panel.runModal() == .OK,
+              let url = panel.url else {
+            return
+        }
+
+        do {
+            try TaggingHistoryStore.csvData(from: model.taggingHistoryRecords)
+                .write(to: url, options: [.atomic])
+            historyExportError = nil
+        } catch {
+            historyExportError = error.localizedDescription
+        }
     }
 }
 

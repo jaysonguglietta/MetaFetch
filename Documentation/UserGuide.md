@@ -23,7 +23,7 @@ If you picked the wrong mode, use `Start Over / Choose Movie or TV Show`. If fil
 2. Drop one or more `.mp4` movie files.
 3. Review the cleaned title query.
 4. Pick the best Wikipedia match.
-5. Edit title, sort title, genre, year, creator, description, or custom poster if the source needs a tweak.
+5. Edit title, sort title, genre, release date, creator, description, or custom poster if the source needs a tweak.
 6. Check poster headroom if artwork is selected and you care about save speed.
 7. Save metadata back to the MP4 and review the save report.
 
@@ -42,7 +42,7 @@ If a title has multiple versions or remakes, include the release year in the sea
 2. Drop one or more `.mp4` episode files.
 3. Check the episode detection hint under the search box.
 4. Pick the correct TVMaze episode result.
-5. Edit title, sort title, series, sort series, season, episode, genre, year, network, description, or custom poster if needed.
+5. Edit title, sort title, series, sort series, season, episode, genre, release date, network, description, or custom poster if needed.
 6. Save metadata back to the MP4 and review the save report.
 
 Good filenames:
@@ -87,7 +87,9 @@ Movie files receive movie-style metadata from Wikipedia, including a downloaded 
 
 The `Downloaded Details` panel shows the source description. The `Manual Edit` panel shows the editable values that MetaFetch will actually write, including sort title, sort series, and an optional custom poster image. In TV batch mode, use the `Data` tab to review and edit the selected episode's downloaded details.
 
-The `Tag Preview Diff` panel compares the provider values with the final edited values that will be written. Use it as a last sanity check before saving, especially after manual edits or batch-applied series choices.
+Release date accepts `YYYY`, `YYYY-MM-DD`, or a full ISO date. Year-only entries remain valid for quick tagging, while full dates are useful when a metadata provider has only partial release information.
+
+The `Tag Preview Diff` panel compares the current MP4 tags with the final edited values when MetaFetch can read existing tags. If no existing tags are readable, it falls back to comparing provider values with the final edited values. Use it as a last sanity check before saving, especially after manual edits or batch-applied series choices.
 
 ## Metadata Providers
 
@@ -101,6 +103,8 @@ For broader movie coverage, open `Options > Metadata Providers` and add your own
 Provider keys are stored locally in macOS Keychain. They are not bundled into the app, committed to the repository, or shared with GitHub. If a key is blank, MetaFetch skips that provider and continues using the remaining sources.
 
 Use `Options > Advanced Preferences` to choose a preferred movie provider. The preferred provider receives a ranking boost, but MetaFetch still shows results from the other enabled sources.
+
+After movie searches, the diagnostics line shows which providers were searched, skipped because no key is configured, failed with a timeout or HTTP status, or returned no results.
 
 ## Search And Review Tips
 
@@ -152,6 +156,8 @@ Use `Options > Advanced Preferences` for power-user workflow controls:
 - `Auto-apply a clear exact show match`: Lets TV batch mode apply a confident show result across loaded episodes automatically.
 - `Rename files after successful save`: Renames verified files using templates like `{title} ({year})` or `{series} - {season_episode} - {title}`.
 - `Watch Folder`: Polls a selected folder and queues new local writable MP4 files automatically.
+- `Provider Health`: Keeps local searched/skipped/failed counts so provider issues are easier to troubleshoot.
+- `Tagging History`: Keeps a short local list of recently verified saves and exports that history as CSV.
 
 Queue filters are available in the sidebar and TV episode list. They filter loaded files by exact match, needs review, series-only, saved, failed, or has poster without removing anything.
 

@@ -161,6 +161,37 @@ struct MP4AtomMetadataWriter: Sendable {
         )
     }
 
+    func currentMetadataSnapshot(at fileURL: URL) throws -> MP4CurrentMetadataSnapshot {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer {
+            try? handle.close()
+        }
+
+        let fileSize = try handle.seekToEnd()
+        let topLevelBoxes = try readTopLevelBoxes(from: handle, fileSize: fileSize)
+
+        guard let movieBox = topLevelBoxes.first(where: { $0.type == .moov }) else {
+            throw AtomWriterError.missingMovieAtom
+        }
+
+        let movieAtomData = try readMovieAtomData(from: handle, movieBox: movieBox)
+        let metadata = try readMetadata(from: movieAtomData)
+
+        return MP4CurrentMetadataSnapshot(
+            title: metadata.firstText(for: [.name]),
+            seriesName: metadata.firstText(for: [.tvShow, .album]),
+            creator: metadata.firstText(for: [.artist, .albumArtist]),
+            genre: metadata.firstText(for: [.genre]),
+            year: firstYear(in: metadata.firstText(for: [.releaseDate])),
+            synopsis: metadata.firstText(for: [.longDescription, .description]),
+            sortTitle: metadata.firstText(for: [.sortName]),
+            sortSeriesName: metadata.firstText(for: [.sortShow, .sortAlbum]),
+            seasonNumber: metadata.firstInteger(for: [.tvSeason]).map(String.init),
+            episodeNumber: metadata.firstInteger(for: [.tvEpisode]).map(String.init),
+            hasArtwork: metadata.hasArtwork
+        )
+    }
+
     func metadataWasPersisted(
         at fileURL: URL,
         result: MediaSearchResult,
@@ -471,7 +502,7 @@ struct MP4AtomMetadataWriter: Sendable {
         appendTextAtom(.longDescription, value: synopsis, to: &atoms)
 
         appendTextAtom(.genre, value: result.primaryGenreName, to: &atoms)
-        appendTextAtom(.releaseDate, value: result.releaseYear ?? result.releaseDate, to: &atoms)
+        appendTextAtom(.releaseDate, value: result.releaseDate ?? result.releaseYear, to: &atoms)
 
         if let creator = result.creatorValue {
             appendTextAtom(.artist, value: creator, to: &atoms)
@@ -702,6 +733,15 @@ struct MP4AtomMetadataWriter: Sendable {
 
     private func normalize(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func firstYear(in value: String?) -> String? {
+        guard let value,
+              let range = value.range(of: #"\b(?:19|20)\d{2}\b"#, options: .regularExpression) else {
+            return nil
+        }
+
+        return String(value[range])
     }
 
     private func unsignedIntegerValue(from data: Data) -> Int? {
@@ -1084,6 +1124,30 @@ private struct ParsedMP4Metadata: Sendable {
     var textValuesByType: [MP4AtomType: [String]] = [:]
     var integerValuesByType: [MP4AtomType: [Int]] = [:]
     var hasArtwork = false
+
+    func firstText(for types: [MP4AtomType]) -> String? {
+        for type in types {
+            guard let values = textValuesByType[type] else {
+                continue
+            }
+
+            if let value = values.compactMap(\.trimmedNilIfBlank).first {
+                return value
+            }
+        }
+
+        return nil
+    }
+
+    func firstInteger(for types: [MP4AtomType]) -> Int? {
+        for type in types {
+            if let value = integerValuesByType[type]?.first {
+                return value
+            }
+        }
+
+        return nil
+    }
 }
 
 private struct MP4AtomType: Hashable, Sendable {

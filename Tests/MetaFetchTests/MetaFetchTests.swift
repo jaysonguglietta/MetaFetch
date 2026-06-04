@@ -236,6 +236,49 @@ final class MetaFetchTests: XCTestCase {
     }
 
     @MainActor
+    func testProviderDiagnosticsUseDetailedProviderStates() async throws {
+        resetAdvancedPreferenceDefaults()
+        ProviderHealthHistory.reset()
+        defer {
+            ProviderHealthHistory.reset()
+        }
+        let directory = try makeTemporaryDirectory(prefix: "MetaFetchProviderDiagnosticsTests")
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let movieFile = directory.appendingPathComponent("The.Matrix.1999.mp4")
+        FileManager.default.createFile(atPath: movieFile.path, contents: Data([0x00]))
+
+        let result = makeResult(
+            id: 301,
+            title: "The Matrix",
+            year: "1999",
+            confidence: .exact,
+            summary: "Exact title and year match",
+            score: 200
+        )
+        let model = AppModel(
+            searchService: DiagnosticStubSearchService(
+                results: [result],
+                diagnostics: [
+                    .searched("Wikipedia", count: 1),
+                    .skipped("TMDb", detail: "no API key configured"),
+                    .failed("OMDb", error: URLError(.timedOut)),
+                ]
+            )
+        )
+        let entry = MovieFileEntry(fileURL: movieFile, mediaMode: .movie)
+        await model.search(file: entry)
+
+        XCTAssertEqual(
+            entry.providerDiagnostics,
+            "Provider priority: Automatic. • Wikipedia: 1 result • TMDb skipped: no API key configured • OMDb failed: request timed out"
+        )
+        XCTAssertEqual(model.providerHealthRecords.first(where: { $0.providerName == "OMDb" })?.failedCount, 1)
+    }
+
+    @MainActor
     func testSaveStopsIfImportedFileIsSwappedBeforeWriting() async throws {
         let directory = try makeTemporaryDirectory(prefix: "MetaFetchRaceTests")
         defer {
@@ -313,6 +356,13 @@ final class MetaFetchTests: XCTestCase {
         XCTAssertNotNil(taggedData.range(of: Data("soal".utf8)))
         XCTAssertNotNil(taggedData.range(of: Data("sonm".utf8)))
         XCTAssertTrue(try MP4AtomMetadataWriter().metadataWasPersisted(at: fileURL, result: result))
+
+        let snapshot = try MP4AtomMetadataWriter().currentMetadataSnapshot(at: fileURL)
+        XCTAssertEqual(snapshot.title, "Episode Three")
+        XCTAssertEqual(snapshot.seriesName, "The Audacity")
+        XCTAssertEqual(snapshot.seasonNumber, "1")
+        XCTAssertEqual(snapshot.episodeNumber, "3")
+        XCTAssertEqual(snapshot.sortTitle, "Episode Three")
     }
 
     func testNativeAtomWriterRejectsOversizedMovieAtomBeforeAllocating() async throws {
@@ -429,6 +479,10 @@ final class MetaFetchTests: XCTestCase {
 
     @MainActor
     func testManualMetadataDraftIsWrittenInsteadOfOriginalResult() async throws {
+        TaggingHistoryStore.reset()
+        defer {
+            TaggingHistoryStore.reset()
+        }
         let directory = try makeTemporaryDirectory(prefix: "MetaFetchManualMetadataTests")
         defer {
             try? FileManager.default.removeItem(at: directory)
@@ -462,6 +516,27 @@ final class MetaFetchTests: XCTestCase {
         XCTAssertEqual(metadataWriter.calls.first?.result.sortTitle, "Custom Cut, The")
         XCTAssertEqual(metadataWriter.calls.first?.result.synopsis, "Edited before saving.")
         XCTAssertEqual(model.lastSaveReport?.successCount, 1)
+        XCTAssertEqual(model.taggingHistoryRecords.first?.title, "Custom Cut")
+    }
+
+    @MainActor
+    func testManualMetadataDraftAcceptsFullReleaseDates() async throws {
+        let result = makeResult(
+            id: 502,
+            title: "The Matrix",
+            year: "1999",
+            confidence: .exact,
+            summary: "Exact title and year match",
+            score: 200
+        )
+        var draft = MetadataDraft(result: result)
+
+        draft.year = "1999-03-31"
+        XCTAssertTrue(draft.isValid(for: result))
+        XCTAssertEqual(draft.applying(to: result).releaseDate, "1999-03-31T00:00:00Z")
+
+        draft.year = "not a date"
+        XCTAssertFalse(draft.isValid(for: result))
     }
 
     func testMetadataProviderPreferencesTrimAndPersistKeys() throws {
@@ -823,6 +898,19 @@ private struct StubSearchService: MediaSearchServing {
 
     func search(matching query: String, mode: MediaLibraryMode) async throws -> [MediaSearchResult] {
         results
+    }
+}
+
+private struct DiagnosticStubSearchService: MetadataDiagnosticSearchServing {
+    let results: [MediaSearchResult]
+    let diagnostics: [MetadataProviderDiagnostic]
+
+    func search(matching query: String, mode: MediaLibraryMode) async throws -> [MediaSearchResult] {
+        results
+    }
+
+    func searchWithDiagnostics(matching query: String, mode: MediaLibraryMode) async throws -> MetadataSearchResponse {
+        MetadataSearchResponse(results: results, diagnostics: diagnostics)
     }
 }
 

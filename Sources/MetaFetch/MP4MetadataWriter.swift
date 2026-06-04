@@ -572,11 +572,26 @@ struct MP4MetadataWriter: MetadataWriting {
     }
 
     private func parsedDate(from rawValue: String?) -> Date? {
-        guard let rawValue, !rawValue.isEmpty else {
+        guard let rawValue = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawValue.isEmpty else {
             return nil
         }
 
-        return ISO8601DateFormatter().date(from: rawValue)
+        if let date = ISO8601DateFormatter().date(from: rawValue) {
+            return date
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+
+        formatter.dateFormat = "yyyy-MM-dd"
+        if let date = formatter.date(from: rawValue) {
+            return date
+        }
+
+        formatter.dateFormat = "yyyy"
+        return formatter.date(from: rawValue)
     }
 
     private func stringItem(identifier: AVMetadataIdentifier, value: String) -> AVMetadataItem {

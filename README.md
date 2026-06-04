@@ -28,7 +28,9 @@ MetaFetch is a native macOS SwiftUI app for tagging `.mp4` files with movie or T
 - Tune advanced preferences for poster defaults, provider priority, safety backups, TV batch auto-apply, watch folders, and rename-after-save templates.
 - Filter loaded files by exact matches, review state, series-only matches, saved files, failures, or poster availability.
 - Retry failed save report rows, including a faster retry-without-posters path.
-- Preview provider metadata versus the final edited tags before writing.
+- Preview current MP4 tags, when readable, versus the final edited tags before writing.
+- Review provider diagnostics showing searched, skipped, failed, and no-key provider states.
+- Track local provider health and recent tagging history in Advanced Preferences, including CSV history export.
 - Optionally rename files after verified saves using movie or TV filename templates.
 - Check GitHub Releases for newer versions, download an installer asset, and reveal it in Finder for user-confirmed installation.
 - Re-check imported file identity before saving so MetaFetch refuses to tag a path that changed after import.
@@ -46,6 +48,8 @@ That path builds and opens a real `.app` bundle with the bundle identifier `com.
 ## Documentation
 
 See [User Guide](Documentation/UserGuide.md) for the full workflow, naming tips, save behavior, and troubleshooting.
+
+See [Product Brief](Documentation/ProductBrief.md) for the target users, product problem, main workflows, assumptions, and done criteria.
 
 See [Product Blueprint](Documentation/ProductBlueprint.md) for the app goal, core workflows, key screens, data models, and edge cases.
 

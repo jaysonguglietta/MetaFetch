@@ -184,25 +184,137 @@ protocol MediaSearchServing: Sendable {
     func search(matching query: String, mode: MediaLibraryMode) async throws -> [MediaSearchResult]
 }
 
+protocol MetadataDiagnosticSearchServing: MediaSearchServing {
+    func searchWithDiagnostics(matching query: String, mode: MediaLibraryMode) async throws -> MetadataSearchResponse
+}
+
+struct MetadataSearchResponse: Sendable {
+    let results: [MediaSearchResult]
+    let diagnostics: [MetadataProviderDiagnostic]
+
+    init(results: [MediaSearchResult], diagnostics: [MetadataProviderDiagnostic] = []) {
+        self.results = results
+        self.diagnostics = diagnostics
+    }
+}
+
+struct MetadataProviderDiagnostic: Hashable, Sendable {
+    enum Status: String, Codable, Sendable {
+        case searched
+        case skipped
+        case failed
+    }
+
+    let providerName: String
+    let status: Status
+    let detail: String
+    let resultCount: Int?
+
+    var summary: String {
+        switch status {
+        case .searched:
+            let count = resultCount ?? 0
+            return "\(providerName): \(count) result\(count == 1 ? "" : "s")\(detail.isEmpty ? "" : " (\(detail))")"
+        case .skipped:
+            return "\(providerName) skipped: \(detail)"
+        case .failed:
+            return "\(providerName) failed: \(detail)"
+        }
+    }
+
+    static func searched(_ providerName: String, count: Int, detail: String = "") -> MetadataProviderDiagnostic {
+        MetadataProviderDiagnostic(providerName: providerName, status: .searched, detail: detail, resultCount: count)
+    }
+
+    static func skipped(_ providerName: String, detail: String) -> MetadataProviderDiagnostic {
+        MetadataProviderDiagnostic(providerName: providerName, status: .skipped, detail: detail, resultCount: nil)
+    }
+
+    static func failed(_ providerName: String, error: Error) -> MetadataProviderDiagnostic {
+        MetadataProviderDiagnostic(
+            providerName: providerName,
+            status: .failed,
+            detail: providerDiagnosticMessage(for: error),
+            resultCount: nil
+        )
+    }
+}
+
+private func providerDiagnosticMessage(for error: Error) -> String {
+    if let localizedError = error as? LocalizedError,
+       let description = localizedError.errorDescription?.trimmedNilIfBlank {
+        return description
+    }
+
+    if let urlError = error as? URLError {
+        switch urlError.code {
+        case .timedOut:
+            return "request timed out"
+        case .dataLengthExceedsMaximum:
+            return "response exceeded the safe size limit"
+        case .notConnectedToInternet, .networkConnectionLost:
+            return "network connection unavailable"
+        case .badServerResponse:
+            return "unexpected server response"
+        default:
+            return urlError.localizedDescription
+        }
+    }
+
+    return error.localizedDescription
+}
+
+private struct MetadataProviderHTTPStatusError: LocalizedError {
+    let statusCode: Int
+
+    var errorDescription: String? {
+        "HTTP \(statusCode)"
+    }
+}
+
 struct MetadataCatalogSearchService: MediaSearchServing {
     private let movieService = WikimediaMovieSearchService()
     private let alternateMovieService = AlternateMovieProviderSearchService()
     private let tvService = TVMazeSearchService()
 
     func search(matching query: String, mode: MediaLibraryMode) async throws -> [MediaSearchResult] {
+        try await searchWithDiagnostics(matching: query, mode: mode).results
+    }
+}
+
+extension MetadataCatalogSearchService: MetadataDiagnosticSearchServing {
+    func searchWithDiagnostics(matching query: String, mode: MediaLibraryMode) async throws -> MetadataSearchResponse {
         switch mode {
         case .movie:
-            async let primaryResults = searchPrimaryMovies(matching: query)
-            async let alternateResults = alternateMovieService.searchMovies(matching: query)
+            async let primaryResponse = searchPrimaryMovies(matching: query)
+            async let alternateResponse = alternateMovieService.searchMovies(matching: query)
+            let responses = await [primaryResponse, alternateResponse]
+            let results = prioritizedMovieResults(responses.flatMap(\.results))
+            let diagnostics = responses.flatMap(\.diagnostics)
 
-            return await prioritizedMovieResults(primaryResults + alternateResults)
+            return MetadataSearchResponse(results: results, diagnostics: diagnostics)
         case .tvShow:
-            return try await tvService.searchTV(matching: query)
+            let results = try await tvService.searchTV(matching: query)
+            return MetadataSearchResponse(
+                results: results,
+                diagnostics: [.searched("TVMaze", count: results.count)]
+            )
         }
     }
 
-    private func searchPrimaryMovies(matching query: String) async -> [MediaSearchResult] {
-        (try? await movieService.searchMovies(matching: query)) ?? []
+    private func searchPrimaryMovies(matching query: String) async -> MetadataSearchResponse {
+        do {
+            let results = try await movieService.searchMovies(matching: query)
+            return MetadataSearchResponse(
+                results: results,
+                diagnostics: [.searched("Wikipedia", count: results.count)]
+            )
+        } catch {
+            return MetadataSearchResponse(
+                results: [],
+                diagnostics: [.failed("Wikipedia", error: error)]
+            )
+        }
     }
 
     private func prioritizedMovieResults(_ results: [MediaSearchResult]) -> [MediaSearchResult] {
@@ -223,7 +335,7 @@ private struct AlternateMovieProviderSearchService {
     private let tmdbService = TMDbMovieSearchService()
     private let omdbService = OMDbMovieSearchService()
 
-    func searchMovies(matching query: String) async -> [MediaSearchResult] {
+    func searchMovies(matching query: String) async -> MetadataSearchResponse {
         async let tmdbResults = tmdbService.searchMovies(
             matching: query,
             apiKey: MetadataProviderPreferences.tmdbAPIKey
@@ -232,9 +344,14 @@ private struct AlternateMovieProviderSearchService {
             matching: query,
             apiKey: MetadataProviderPreferences.omdbAPIKey
         )
-
-        return await (tmdbResults + omdbResults)
+        let responses = await [tmdbResults, omdbResults]
+        let results = responses.flatMap(\.results)
             .sorted { lhs, rhs in lhs.matchScore > rhs.matchScore }
+
+        return MetadataSearchResponse(
+            results: results,
+            diagnostics: responses.flatMap(\.diagnostics)
+        )
     }
 }
 
@@ -259,11 +376,21 @@ private struct TMDbMovieSearchService {
         }
     }
 
-    func searchMovies(matching query: String, apiKey: String) async -> [MediaSearchResult] {
+    func searchMovies(matching query: String, apiKey: String) async -> MetadataSearchResponse {
         let apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let sanitizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !apiKey.isEmpty, !sanitizedQuery.isEmpty else {
-            return []
+        guard !sanitizedQuery.isEmpty else {
+            return MetadataSearchResponse(
+                results: [],
+                diagnostics: [.skipped("TMDb", detail: "empty search query")]
+            )
+        }
+
+        guard !apiKey.isEmpty else {
+            return MetadataSearchResponse(
+                results: [],
+                diagnostics: [.skipped("TMDb", detail: "no API key configured")]
+            )
         }
 
         var components = URLComponents(string: "https://api.themoviedb.org/3/search/movie")
@@ -276,7 +403,10 @@ private struct TMDbMovieSearchService {
         ]
 
         guard let url = components?.url else {
-            return []
+            return MetadataSearchResponse(
+                results: [],
+                diagnostics: [.skipped("TMDb", detail: "search URL could not be created")]
+            )
         }
 
         do {
@@ -284,7 +414,7 @@ private struct TMDbMovieSearchService {
             let expectedYear = extractYear(from: sanitizedQuery)
             let normalizedQuery = normalizedTitle(from: sanitizedQuery)
 
-            return response.results
+            let results = response.results
                 .prefix(10)
                 .map {
                     buildResult(
@@ -293,8 +423,16 @@ private struct TMDbMovieSearchService {
                         expectedYear: expectedYear
                     )
                 }
+
+            return MetadataSearchResponse(
+                results: results,
+                diagnostics: [.searched("TMDb", count: results.count)]
+            )
         } catch {
-            return []
+            return MetadataSearchResponse(
+                results: [],
+                diagnostics: [.failed("TMDb", error: error)]
+            )
         }
     }
 
@@ -344,9 +482,12 @@ private struct TMDbMovieSearchService {
         request.setValue("MetaFetch/1.1", forHTTPHeaderField: "User-Agent")
 
         let (data, response) = try await BoundedJSONRequest.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200..<300).contains(httpResponse.statusCode) else {
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
+        }
+
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw MetadataProviderHTTPStatusError(statusCode: httpResponse.statusCode)
         }
 
         return try JSONDecoder().decode(Response.self, from: data)
@@ -357,6 +498,7 @@ private struct OMDbMovieSearchService {
     private struct SearchResponse: Decodable {
         let Search: [SearchHit]?
         let Response: String
+        let Error: String?
     }
 
     private struct SearchHit: Decodable {
@@ -378,11 +520,21 @@ private struct OMDbMovieSearchService {
         let Response: String
     }
 
-    func searchMovies(matching query: String, apiKey: String) async -> [MediaSearchResult] {
+    func searchMovies(matching query: String, apiKey: String) async -> MetadataSearchResponse {
         let apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let sanitizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !apiKey.isEmpty, !sanitizedQuery.isEmpty else {
-            return []
+        guard !sanitizedQuery.isEmpty else {
+            return MetadataSearchResponse(
+                results: [],
+                diagnostics: [.skipped("OMDb", detail: "empty search query")]
+            )
+        }
+
+        guard !apiKey.isEmpty else {
+            return MetadataSearchResponse(
+                results: [],
+                diagnostics: [.skipped("OMDb", detail: "no API key configured")]
+            )
         }
 
         var components = URLComponents(string: "https://www.omdbapi.com/")
@@ -394,13 +546,19 @@ private struct OMDbMovieSearchService {
         ]
 
         guard let url = components?.url else {
-            return []
+            return MetadataSearchResponse(
+                results: [],
+                diagnostics: [.skipped("OMDb", detail: "search URL could not be created")]
+            )
         }
 
         do {
             let response: SearchResponse = try await performRequest(url, decoding: SearchResponse.self)
             guard response.Response.lowercased() == "true" else {
-                return []
+                return MetadataSearchResponse(
+                    results: [],
+                    diagnostics: [.searched("OMDb", count: 0, detail: response.Error ?? "no matching movie results")]
+                )
             }
 
             let details = await fetchDetails(
@@ -410,15 +568,23 @@ private struct OMDbMovieSearchService {
             let expectedYear = extractYear(from: sanitizedQuery)
             let normalizedQuery = normalizedTitle(from: sanitizedQuery)
 
-            return details.map {
+            let results = details.map {
                 buildResult(
                     from: $0,
                     normalizedQuery: normalizedQuery,
                     expectedYear: expectedYear
                 )
             }
+
+            return MetadataSearchResponse(
+                results: results,
+                diagnostics: [.searched("OMDb", count: results.count)]
+            )
         } catch {
-            return []
+            return MetadataSearchResponse(
+                results: [],
+                diagnostics: [.failed("OMDb", error: error)]
+            )
         }
     }
 
@@ -506,9 +672,12 @@ private struct OMDbMovieSearchService {
         request.setValue("MetaFetch/1.1", forHTTPHeaderField: "User-Agent")
 
         let (data, response) = try await BoundedJSONRequest.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200..<300).contains(httpResponse.statusCode) else {
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
+        }
+
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw MetadataProviderHTTPStatusError(statusCode: httpResponse.statusCode)
         }
 
         return try JSONDecoder().decode(Response.self, from: data)
