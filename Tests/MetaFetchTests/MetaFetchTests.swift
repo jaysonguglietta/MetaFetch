@@ -43,6 +43,18 @@ final class MetaFetchTests: XCTestCase {
         XCTAssertEqual(query, "Some Show S01E03")
     }
 
+    func testTVModePreservesTrailingEpisodeTitleForFallbackSearch() async throws {
+        let parsed = FilenameTitleParser.parsedQuery(
+            fromFilename: "Interview with the Vampire - S03E03 - Toronto.mp4",
+            mode: .tvShow
+        )
+
+        XCTAssertEqual(parsed.title, "Interview with the Vampire")
+        XCTAssertEqual(parsed.episodeCode, "S03E03")
+        XCTAssertEqual(parsed.episodeTitle, "Toronto")
+        XCTAssertEqual(parsed.suggestedSearchText, "Interview with the Vampire S03E03 Toronto")
+    }
+
     func testTVModeNormalizesAlternateEpisodeNotation() async throws {
         let query = FilenameTitleParser.suggestedQuery(
             from: "Severance.2x07.2160p.WEB-DL.mp4",

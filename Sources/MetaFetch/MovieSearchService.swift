@@ -1261,8 +1261,9 @@ private struct TVMazeSearchService {
         if parsedQuery.isEpisodeSpecific,
            let seasonNumber = parsedQuery.seasonNumber,
            let episodeNumber = parsedQuery.episodeNumber {
+            let candidateHits = Array(hits.prefix(6))
             let episodeMatches = try await fetchEpisodeMatches(
-                from: Array(hits.prefix(6)),
+                from: candidateHits,
                 parsedQuery: parsedQuery,
                 seasonNumber: seasonNumber,
                 episodeNumber: episodeNumber
@@ -1275,6 +1276,24 @@ private struct TVMazeSearchService {
                     }
 
                     return lhs.matchScore > rhs.matchScore
+                }
+            }
+
+            if let episodeTitle = parsedQuery.episodeTitle {
+                let titleMatches = try await fetchEpisodeTitleMatches(
+                    from: candidateHits,
+                    parsedQuery: parsedQuery,
+                    episodeTitle: episodeTitle
+                )
+
+                if !titleMatches.isEmpty {
+                    return titleMatches.sorted { lhs, rhs in
+                        if lhs.matchScore == rhs.matchScore {
+                            return lhs.trackName < rhs.trackName
+                        }
+
+                        return lhs.matchScore > rhs.matchScore
+                    }
                 }
             }
         }
@@ -1360,6 +1379,57 @@ private struct TVMazeSearchService {
         return try await performOptionalRequest(url, decoding: TVMazeEpisode.self)
     }
 
+    private func fetchEpisodeTitleMatches(
+        from hits: [ShowSearchHit],
+        parsedQuery: ParsedMediaQuery,
+        episodeTitle: String
+    ) async throws -> [MediaSearchResult] {
+        let normalizedEpisodeTitle = normalizedTitle(from: episodeTitle)
+        guard !normalizedEpisodeTitle.isEmpty else {
+            return []
+        }
+
+        return await withTaskGroup(of: [MediaSearchResult].self) { group in
+            for hit in hits {
+                group.addTask {
+                    do {
+                        let episodes = try await fetchEpisodes(forShowID: hit.show.id)
+                        return episodes
+                            .filter { episode in
+                                normalizedTitle(from: episode.name) == normalizedEpisodeTitle
+                            }
+                            .map { episode in
+                                buildEpisodeResult(
+                                    episode: episode,
+                                    show: hit.show,
+                                    showScore: hit.score,
+                                    parsedQuery: parsedQuery,
+                                    matchedByEpisodeTitle: episodeTitle
+                                )
+                            }
+                    } catch {
+                        return []
+                    }
+                }
+            }
+
+            var matches: [MediaSearchResult] = []
+            for await result in group {
+                matches.append(contentsOf: result)
+            }
+
+            return matches
+        }
+    }
+
+    private func fetchEpisodes(forShowID showID: Int) async throws -> [TVMazeEpisode] {
+        guard let url = URL(string: "https://api.tvmaze.com/shows/\(showID)/episodes") else {
+            throw SearchError.invalidURL
+        }
+
+        return try await performRequest(url, decoding: [TVMazeEpisode].self)
+    }
+
     private func performRequest<Response: Decodable>(_ url: URL, decoding type: Response.Type) async throws -> Response {
         var request = URLRequest(url: url)
         request.timeoutInterval = BoundedJSONRequest.timeoutInterval
@@ -1413,12 +1483,15 @@ private struct TVMazeSearchService {
         episode: TVMazeEpisode,
         show: TVMazeShow,
         showScore: Double,
-        parsedQuery: ParsedMediaQuery
+        parsedQuery: ParsedMediaQuery,
+        matchedByEpisodeTitle: String? = nil
     ) -> MediaSearchResult {
         let normalizedShowName = normalizedTitle(from: show.name)
         let normalizedQuery = normalizedTitle(from: parsedQuery.title)
+        let normalizedEpisodeTitle = matchedByEpisodeTitle.map { normalizedTitle(from: $0) }
         let exactTitle = normalizedShowName == normalizedQuery
         let partialTitle = !exactTitle && normalizedShowName.contains(normalizedQuery)
+        let episodeTitleMatches = normalizedEpisodeTitle == normalizedTitle(from: episode.name)
         let yearMatches = parsedQuery.year == nil || show.premiered?.hasPrefix(parsedQuery.year ?? "") == true
 
         var score = Int(showScore * 30)
@@ -1429,6 +1502,9 @@ private struct TVMazeSearchService {
         }
 
         score += 80
+        if episodeTitleMatches {
+            score += 65
+        }
 
         if yearMatches, parsedQuery.year != nil {
             score += 20
@@ -1437,6 +1513,8 @@ private struct TVMazeSearchService {
         let confidence: MatchConfidence
         if exactTitle && yearMatches {
             confidence = .exact
+        } else if episodeTitleMatches {
+            confidence = partialTitle || exactTitle ? .strong : .possible
         } else if exactTitle || partialTitle {
             confidence = .strong
         } else {
@@ -1445,7 +1523,14 @@ private struct TVMazeSearchService {
 
         let episodeCode = episodeCode(season: episode.season, episode: episode.number)
         let summary: String
-        if exactTitle && yearMatches {
+        if let matchedByEpisodeTitle,
+           let requestedCode = parsedQuery.episodeCode,
+           let providerCode = episodeCode,
+           requestedCode != providerCode {
+            summary = "Matched episode title \"\(matchedByEpisodeTitle)\" after \(requestedCode) was not found; TVMaze lists it as \(providerCode)"
+        } else if let matchedByEpisodeTitle {
+            summary = "Matched episode title \"\(matchedByEpisodeTitle)\""
+        } else if exactTitle && yearMatches {
             summary = "Exact show + \(episodeCode ?? "episode") match"
         } else if exactTitle {
             summary = "Exact show match for \(episodeCode ?? "episode")"

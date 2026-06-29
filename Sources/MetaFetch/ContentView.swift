@@ -2886,6 +2886,7 @@ private struct HelpView: View {
                         rows: [
                             "No matches usually means the query is too noisy. Try a shorter title or add the release year.",
                             "Series Only in TV mode means MetaFetch found the show but still needs a specific episode code.",
+                            "If an exact TV episode code is missing, MetaFetch also tries the trailing episode title and explains when TVMaze lists it under a different show or season.",
                             "For multi-episode tagging, search the show once in the batch workspace, click the right show card, review the badges, then Save All Tagged + Posters.",
                             "If saving is slow, check poster headroom or turn off poster artwork so MetaFetch can try the metadata-only fast path.",
                             "If MetaFetch says a file changed after import, remove that row and add the MP4 again before saving.",

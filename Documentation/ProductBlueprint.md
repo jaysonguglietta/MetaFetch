@@ -26,11 +26,12 @@ The first screen is the working app experience: choose `Movie` or `TV Show`, the
 
 1. Choose `TV Show`.
 2. Drop one or more local writable MP4 episode files.
-3. Let MetaFetch detect episode codes such as `S01E03`, `2x07`, or folder-based season context.
+3. Let MetaFetch detect episode codes such as `S01E03`, `2x07`, folder-based season context, and trailing episode titles such as `S03E03 - Toronto`.
 4. For a single file, search and choose the exact episode match.
-5. For multiple files from one show, use the batch workspace to search the show once, apply it across detected episodes, review each episode, choose cover behavior, and save all ready files.
-6. Import season folders when there are many episodes to queue.
-7. Block accidental series-only saves for episode files unless the user explicitly confirms that choice.
+5. If the provider does not have the requested episode code, use the trailing episode title as a fallback and explain when the provider lists it under a rebranded show or different season.
+6. For multiple files from one show, use the batch workspace to search the show once, apply it across detected episodes, review each episode, choose cover behavior, and save all ready files.
+7. Import season folders when there are many episodes to queue.
+8. Block accidental series-only saves for episode files unless the user explicitly confirms that choice.
 
 ### Updates And Help
 
@@ -60,7 +61,7 @@ The first screen is the working app experience: choose `Movie` or `TV Show`, the
 - `AppModel`: Main application state, imported file queue, selected mode, search/save orchestration, batch workflow, notices, and confirmation state.
 - `MovieFileEntry`: One imported MP4 plus query text, parsed media hints, selected match, search results, save status, file identity, and progress labels.
 - `MediaLibraryMode`: The user-selected workflow, currently movie or TV show.
-- `ParsedMediaQuery`: Filename/folder-derived title, year, season, episode, and confidence hints.
+- `ParsedMediaQuery`: Filename/folder-derived title, year, season, episode, trailing episode-title fallback, and confidence hints.
 - `MediaSearchResult`: A normalized metadata result from Wikipedia/Wikimedia, optional TMDb/OMDb, or TVMaze, including title, description, media kind, artwork URL, source URL, match quality, sort fields, and episode fields.
 - `TVBatchTab`: The batch workspace sections used to keep multi-episode tagging reviewable.
 - `MovieSearchService`: Network metadata lookups, provider-specific parsing, ranking, and result normalization.
@@ -84,7 +85,7 @@ The first screen is the working app experience: choose `Movie` or `TV Show`, the
 - A path can change after import; MetaFetch must re-check identity before saving so it does not tag the wrong object.
 - Search results can be empty, ambiguous, stale by the time they return, or series-only when an episode is expected.
 - Optional provider keys can be missing, revoked, rate limited, or configured incorrectly; MetaFetch should skip failing optional providers without breaking default search.
-- TV filenames can omit show names, use folder context, include specials, or have malformed episode codes.
+- TV filenames can omit show names, use folder context, include specials, have malformed episode codes, or refer to episodes that TVMaze lists under a rebranded show or different season.
 - Artwork can be absent, oversized, redirected to an unexpected host, invalid image data, or slow to download.
 - MP4 files can have no metadata headroom, oversized `moov` atoms, unusual atom nesting, or layouts that require a full container rewrite.
 - Save operations can be cancelled, interrupted, fail verification, or leave the user unsure whether tags persisted unless the app reads back after writing.

@@ -6,6 +6,7 @@ struct ParsedMediaQuery: Equatable, Sendable {
     let year: String?
     let seasonNumber: Int?
     let episodeNumber: Int?
+    let episodeTitle: String?
 
     var episodeCode: String? {
         guard let seasonNumber, let episodeNumber else {
@@ -26,7 +27,7 @@ struct ParsedMediaQuery: Equatable, Sendable {
                 .compactMap { $0 }
                 .joined(separator: " ")
         case .tvShow:
-            return [title.nilIfBlank, year?.nilIfBlank, episodeCode]
+            return [title.nilIfBlank, year?.nilIfBlank, episodeCode, episodeTitle?.nilIfBlank]
                 .compactMap { $0?.nilIfBlank }
                 .joined(separator: " ")
         }
@@ -72,7 +73,8 @@ enum FilenameTitleParser {
             title: title,
             year: fileQuery.year,
             seasonNumber: fileQuery.seasonNumber ?? folderContext.seasonNumber,
-            episodeNumber: fileQuery.episodeNumber
+            episodeNumber: fileQuery.episodeNumber,
+            episodeTitle: fileQuery.episodeTitle
         )
     }
 
@@ -118,12 +120,14 @@ enum FilenameTitleParser {
                 title: basename,
                 year: nil,
                 seasonNumber: nil,
-                episodeNumber: nil
+                episodeNumber: nil,
+                episodeTitle: nil
             )
         }
 
         let rawTokens = normalizedSeparators.split(whereSeparator: \.isWhitespace).map(String.init)
         var keptTokens: [String] = []
+        var episodeTitleTokens: [String] = []
         var detectedYear: String?
         var detectedSeason = parseSeasonNumber(from: normalizedSeparators)
         var detectedEpisode = parseEpisodePhrase(from: normalizedSeparators)
@@ -165,6 +169,10 @@ enum FilenameTitleParser {
             }
 
             if encounteredEpisodeToken {
+                if mode == .tvShow, isPotentialEpisodeTitleToken(cleaned) {
+                    episodeTitleTokens.append(cleaned)
+                }
+
                 continue
             }
 
@@ -180,13 +188,18 @@ enum FilenameTitleParser {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         let fallbackTitle = query.isEmpty ? normalizedSeparators : query
+        let episodeTitle = episodeTitleTokens.joined(separator: " ")
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfBlank
 
         return ParsedMediaQuery(
             mode: mode,
             title: fallbackTitle,
             year: detectedYear,
             seasonNumber: detectedSeason,
-            episodeNumber: detectedEpisode
+            episodeNumber: detectedEpisode,
+            episodeTitle: episodeTitle
         )
     }
 
@@ -300,6 +313,10 @@ enum FilenameTitleParser {
         }
 
         return true
+    }
+
+    private static func isPotentialEpisodeTitleToken(_ token: String) -> Bool {
+        token.range(of: #"[a-z]"#, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     private static func isNoise(_ token: String) -> Bool {

@@ -112,6 +112,7 @@ After movie searches, the diagnostics line shows which providers were searched, 
 - Add a year for remakes, reboots, or titles with many similarly named results.
 - Add TMDb or OMDb keys if Wikipedia has weak coverage for a movie title.
 - In TV mode, include `S01E03` or `2x07` when you want a specific episode result.
+- If a TV provider does not have the requested episode code, MetaFetch also tries a trailing episode title from the filename, such as `S03E03 - Toronto`. When that finds a result under a rebranded show or different provider season, the match summary explains the provider's listed episode code.
 - Use `Open Source` before saving when two result cards look similar.
 
 ## Review Badges
