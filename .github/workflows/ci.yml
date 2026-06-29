@@ -9,7 +9,7 @@ on:
 jobs:
   test-and-build:
     name: Test and Build
-    runs-on: macos-latest
+    runs-on: macos-15
 
     steps:
       - name: Check out repository
