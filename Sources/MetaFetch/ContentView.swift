@@ -2837,10 +2837,12 @@ private struct HelpView: View {
                         rows: [
                             "MetaFetch first writes Apple/iTunes-style MP4 metadata atoms directly into the movie header when possible.",
                             "Use Manual Edit to adjust title, sort title, series, sort series, genre, release date, season, episode, creator, description, and custom poster before saving.",
+                            "Clearing an optional Manual Edit field removes that managed tag; missing-description placeholder text is never written into the MP4.",
                             "Use Check Poster Headroom before artwork saves to estimate whether a fast header update is likely.",
                             "Batch saves keep poster artwork on when the selected source provides it.",
                             "Saving with poster artwork may rebuild the MP4 container, but video/audio are not re-encoded.",
-                            "The save report shows the actual write path, duration, poster state, failures, and backup files, then exports CSV or JSON or retries failed rows.",
+                            "A save is reported successful only after every requested field and poster are read back from disk; failed writes restore the original data.",
+                            "The save report shows the actual write path, duration, poster state, failures, and backup files, then exports safe CSV or JSON or retries failed rows.",
                             "Use Advanced Preferences for poster defaults, safety backups, provider priority, watch folders, and rename-after-save templates.",
                         ]
                     )
@@ -2875,7 +2877,8 @@ private struct HelpView: View {
                         rows: [
                             "Use Updates in the toolbar or Check for Updates from the app menu to look for newer GitHub releases.",
                             "MetaFetch compares the installed app version with the latest GitHub release tag.",
-                            "When a release has a DMG, ZIP, or PKG asset, MetaFetch can download it to Downloads and reveal it in Finder.",
+                            "A release asset must include an exact-name .sha256 sidecar; MetaFetch verifies the checksum before keeping the download.",
+                            "DMG downloads must also pass macOS code-signature validation and match the installed app's Developer ID team when available.",
                             "Installer replacement still stays visible and user-confirmed, and MetaFetch no longer opens downloaded installers automatically.",
                         ]
                     )
@@ -3802,84 +3805,6 @@ private struct MetadataLine: View {
             Text(value)
                 .font(RetroTheme.bodyFont(15))
                 .foregroundStyle(RetroTheme.paper)
-        }
-    }
-}
-
-private struct ArtworkView: View {
-    let url: URL?
-    let width: CGFloat
-    let height: CGFloat
-    let accent: Color
-    @State private var artworkData: Data?
-    @State private var isLoading = false
-
-    var body: some View {
-        Group {
-            if let artworkData,
-               let nsImage = NSImage(data: artworkData) {
-                Image(nsImage: nsImage)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                placeholder
-                    .opacity(isLoading ? 0.72 : 1)
-            }
-        }
-        .frame(width: width, height: height)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(accent.opacity(0.85), lineWidth: 2)
-        )
-        .shadow(color: accent.opacity(0.20), radius: 14, x: 0, y: 12)
-        .accessibilityHidden(true)
-        .task(id: url) {
-            await loadArtwork()
-        }
-    }
-
-    @MainActor
-    private func loadArtwork() async {
-        artworkData = nil
-        guard let url else {
-            isLoading = false
-            return
-        }
-
-        isLoading = true
-        defer {
-            isLoading = false
-        }
-
-        do {
-            artworkData = try await ArtworkPipeline.shared.preparedArtwork(for: url)
-        } catch {
-            artworkData = nil
-        }
-    }
-
-    private var placeholder: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [RetroTheme.panelRaised, RetroTheme.panel],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-
-            VStack(spacing: 10) {
-                Image(systemName: "film.stack")
-                    .font(.system(size: width / 4.4, weight: .bold))
-                    .foregroundStyle(accent)
-
-                Text("NO COVER")
-                    .font(RetroTheme.labelFont(13))
-                    .tracking(2.2)
-                    .foregroundStyle(RetroTheme.paper.opacity(0.8))
-            }
         }
     }
 }

@@ -18,9 +18,10 @@ MetaFetch is a native macOS SwiftUI app for tagging `.mp4` files with movie or T
 - Download movie and TV episode details/descriptions, then write title, synopsis, genre, artwork, and movie or episode-specific metadata back to Apple/iTunes-style MP4 atoms.
 - Check MP4 metadata headroom before poster saves to see whether a fast header update or container rewrite is likely.
 - Use a native MP4 atom writer first, then fall back to AVFoundation only when the file layout requires it.
-- Verify saved metadata by reading the MP4 back after writing, then fall back if a fast save does not stick.
+- Verify every requested metadata field and requested poster by reading the MP4 back after writing, then roll back or fall back if a save does not stick.
+- Preserve unrelated third-party MP4 metadata while replacing only the Apple/iTunes-style fields managed by MetaFetch.
 - Prioritize speed by writing without creating sidecar safety backups by default.
-- Optionally enable safety backups when protection matters more than speed.
+- Use an internal transactional rollback journal during writes, and optionally keep a separate user-visible safety backup when protection matters more than speed.
 - Review save reports showing which files verified, failed, included posters, used fast metadata-only saves, or required rewrites.
 - Export save reports as CSV or JSON.
 - Group folder and season imports by detected show and season in the TV batch workspace.
@@ -55,6 +56,8 @@ See [Product Brief](Documentation/ProductBrief.md) for the target users, product
 See [Product Blueprint](Documentation/ProductBlueprint.md) for the app goal, core workflows, key screens, data models, and edge cases.
 
 See [Feature Suggestions](Documentation/FeatureSuggestions.md) for the next product ideas worth considering.
+
+See [Security and Release Notes](Documentation/Security.md) for file-write guarantees, network boundaries, updater requirements, and residual risks.
 
 In the app, use the `Help` toolbar button or choose `Help > MetaFetch Help` with `Command-Shift-?`.
 
@@ -107,13 +110,13 @@ APP_NOTARY_PROFILE="metafetch-notary" \
 
 MetaFetch checks `jaysonguglietta/MetaFetch` GitHub Releases. A release is considered newer when its tag, such as `v1.1` or `1.1`, is greater than the app’s `CFBundleShortVersionString`.
 
-For in-app downloads, attach one installable asset to the GitHub release:
+For in-app downloads, attach an installable asset and its exact-name SHA-256 sidecar to the GitHub release:
 
-- `.dmg`
-- `.zip`
-- `.pkg`
+- `MetaFetch-1.1.dmg` and `MetaFetch-1.1.dmg.sha256`
+- `MetaFetch-1.1.zip` and `MetaFetch-1.1.zip.sha256`
+- `MetaFetch-1.1.pkg` and `MetaFetch-1.1.pkg.sha256`
 
-MetaFetch downloads the asset to the user’s Downloads folder and reveals it in Finder. It does not auto-open downloaded installers, so the final app replacement remains visible and user-confirmed instead of silently replacing a running app.
+MetaFetch verifies the downloaded bytes against the sidecar before moving the asset to the user’s Downloads folder. DMG downloads must also have a valid macOS code signature; when the installed app has a Developer ID Team ID, the DMG must use the same team. MetaFetch then reveals the asset in Finder without opening it, so the final app replacement remains visible and user-confirmed instead of silently replacing a running app.
 
 For production releases, sign and notarize installer assets before attaching them to GitHub. `Scripts/build_release_dmg.sh` creates a DMG and SHA-256 file for that workflow. The in-app updater intentionally treats GitHub release downloads as manual installs rather than silently trusted code.
 
@@ -122,9 +125,12 @@ For production releases, sign and notarize installer assets before attaching the
 - Imported files must be local, writable, regular `.mp4` files and cannot be symlinks.
 - MetaFetch stores file identity at import and re-checks it immediately before saving.
 - The native MP4 atom writer rejects oversized movie headers and overly complex atom layouts before allocating or recursing deeply.
+- Writes preserve unknown metadata atoms, use transactional rollback protection, and require full requested-field readback verification before success is reported.
 - Artwork downloads are size-bounded, MIME-checked, downsampled, cached with eviction, and rejected when redirects leave the artwork host allowlist.
-- Update downloads are size-bounded and revealed in Finder instead of opened automatically.
-- CI runs the test suite, builds the app bundle, and verifies the generated signature.
+- Metadata JSON downloads use timeouts and response-size limits; identical TVMaze episode catalogs are coalesced and cached with bounded eviction.
+- Update downloads are size-bounded, SHA-256 verified, code-signature checked for DMGs, and revealed in Finder instead of opened automatically.
+- CSV exports neutralize spreadsheet-formula prefixes in user-controlled cells.
+- CI uses least-privilege repository permissions, a SHA-pinned checkout action, run concurrency limits, and build timeouts.
 
 ## Data Sources
 

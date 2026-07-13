@@ -1,10 +1,10 @@
 # MetaFetch User Guide
 
-MetaFetch tags MP4 files with movie or TV episode metadata. It does not delete your files. When saving, it updates the original file with Apple/iTunes-style MP4 metadata atoms when possible, or writes a tagged temporary copy and replaces the original when the container needs to be rebuilt.
+MetaFetch tags MP4 files with movie or TV episode metadata. It does not intentionally delete your media. When saving, it updates the original file with Apple/iTunes-style MP4 metadata atoms when possible, or writes a tagged temporary copy and transactionally replaces the original when the container needs to be rebuilt.
 
-For speed, MetaFetch does not create a sidecar safety backup by default. Metadata-only saves write directly to the original MP4 header. Container rebuilds still write a temporary tagged copy first, then replace the original when the rebuild finishes. If you want extra protection, enable `Create Safety Backups` from the `Options` toolbar menu before saving.
+For speed, MetaFetch does not keep a user-visible sidecar safety backup by default. Fast header saves retain the overwritten header bytes in memory when safely bounded. Container rebuilds keep a hidden same-folder rollback journal until the replacement passes verification. If you want a separate recovery copy that remains after saving, enable `Create Safety Backups` from the `Options` toolbar menu before saving.
 
-After every save, MetaFetch reads the MP4 back and verifies that core tags such as title and show name actually persisted. If a metadata-only fast save reports success but the tags are not readable afterward, MetaFetch falls back to a full container rewrite instead of silently leaving the file untagged.
+After every save, MetaFetch reads the MP4 back and verifies every requested field, the media kind, season/episode numbers, and requested artwork. If a metadata-only fast save does not verify, MetaFetch restores the original header and falls back to a full container rewrite. A rebuilt file is not committed unless it also passes verification.
 
 MetaFetch also remembers the file identity when you import a file. If that path becomes a symlink, stops being a writable local MP4, or points to a different file before saving, MetaFetch stops before writing and asks you to remove and re-add the file.
 
@@ -87,6 +87,8 @@ Movie files receive movie-style metadata from Wikipedia, including a downloaded 
 
 The `Downloaded Details` panel shows the source description. The `Manual Edit` panel shows the editable values that MetaFetch will actually write, including sort title, sort series, and an optional custom poster image. In TV batch mode, use the `Data` tab to review and edit the selected episode's downloaded details.
 
+Clearing an optional field in `Manual Edit` removes that MetaFetch-managed tag instead of silently restoring the provider value. A display message such as “No synopsis was returned” is never written as the file description. Metadata atoms that MetaFetch does not manage are preserved during native rewrites.
+
 Release date accepts `YYYY`, `YYYY-MM-DD`, or a full ISO date. Year-only entries remain valid for quick tagging, while full dates are useful when a metadata provider has only partial release information.
 
 The `Tag Preview Diff` panel compares the current MP4 tags with the final edited values when MetaFetch can read existing tags. If no existing tags are readable, it falls back to comparing provider values with the final edited values. Use it as a last sanity check before saving, especially after manual edits or batch-applied series choices.
@@ -133,7 +135,7 @@ Use `Open Source` on result cards to inspect the source page before choosing a m
 
 Use `Check Poster Headroom` before saving artwork to estimate whether the selected tags and poster fit in the reserved MP4 header space. The save report confirms the actual path used: fast metadata-only, native container rewrite, or AVFoundation rewrite.
 
-After every single or batch save, MetaFetch shows a save report with verified files, failures, duration, poster state, backup location when safety backups are enabled, and the write path used for each MP4. Use the toolbar `Report` button to reopen the latest report, or export it as CSV or JSON.
+After every single or batch save, MetaFetch shows a save report with verified files, failures, duration, poster state, backup location when safety backups are enabled, and the write path used for each MP4. Use the toolbar `Report` button to reopen the latest report, or export it as CSV or JSON. CSV text is escaped so filenames or titles beginning with spreadsheet formula characters remain plain text when opened in a spreadsheet.
 
 If a report has failures, use `Retry Failed` to rerun the failed rows or `Retry Without Posters` to attempt a faster metadata-only retry.
 
@@ -172,7 +174,7 @@ Use `Updates` in the toolbar or `Check for Updates...` from the app menu to ask 
 
 MetaFetch compares the installed app version with the latest release tag in `jaysonguglietta/MetaFetch`. Tags like `v1.1` and `1.1` are both understood as version `1.1`.
 
-If the newer release includes a `.dmg`, `.zip`, or `.pkg` asset, MetaFetch can download it to your Downloads folder and reveal it in Finder. It does not open downloaded installers automatically. Open the downloaded file only after you trust the GitHub release.
+If the newer release includes a `.dmg`, `.zip`, or `.pkg` asset plus a matching `<asset-name>.sha256` file, MetaFetch can download it to your Downloads folder and reveal it in Finder. The app verifies the checksum first. DMG files must also have a valid macOS code signature and, for Developer ID builds, match the installed app's signing team. MetaFetch does not open downloaded installers automatically.
 
 If the update checker says a release has no installable asset, open the release page and download the app manually.
 
@@ -192,7 +194,7 @@ If the update checker says a release has no installable asset, open the release 
 - If saving is slow, use `Check Poster Headroom`; the MP4 may not have enough metadata space for a poster and may need a container rebuild.
 - If a newly converted MP4 never accepts tags quickly, rebuild it with MP4 metadata headroom such as `-moov_size 16777216`.
 - If MetaFetch says the file changed after import, remove that row and add the MP4 again. This protects against tagging the wrong filesystem object.
-- If update checking fails, confirm you can reach GitHub and that the latest release includes a `.dmg`, `.zip`, or `.pkg` asset.
+- If update downloading fails, confirm the GitHub release contains both the installer and its exact `<asset-name>.sha256` sidecar. DMGs must be signed, and production DMGs should be notarized.
 - If the app feels stuck on a bad batch, use `Start Over` to clear the queue and choose a mode again.
 - If you enable `Create Safety Backups`, MetaFetch leaves `.metafetch-backup-*` files next to the original MP4 so you can recover manually if needed.
 

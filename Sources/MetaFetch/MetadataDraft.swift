@@ -20,7 +20,7 @@ struct MetadataDraft: Equatable, Sendable {
         creator = result.creatorValue ?? ""
         genre = result.primaryGenreName ?? ""
         year = result.releaseYear ?? ""
-        synopsis = result.synopsis
+        synopsis = result.persistableSynopsis ?? ""
         sortTitle = result.sortTitle ?? result.trackName
         sortSeriesName = result.sortSeriesName ?? result.seriesName ?? ""
         seasonNumber = result.seasonNumber.map(String.init) ?? ""
@@ -37,19 +37,23 @@ struct MetadataDraft: Equatable, Sendable {
         }
 
         let trimmedReleaseDate = year.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedSeason = seasonNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedEpisode = episodeNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         return !trimmedTitle.isEmpty &&
-            (trimmedReleaseDate.isEmpty || normalizedReleaseDate(from: year, fallback: nil) != nil)
+            (trimmedReleaseDate.isEmpty || normalizedReleaseDate(from: year) != nil) &&
+            (trimmedSeason.isEmpty || normalizedInteger(seasonNumber) != nil) &&
+            (trimmedEpisode.isEmpty || normalizedInteger(episodeNumber) != nil)
     }
 
     func applying(to result: MediaSearchResult) -> MediaSearchResult {
-        let releaseDate = normalizedReleaseDate(from: year, fallback: result.releaseDate)
+        let releaseDate = normalizedReleaseDate(from: year)
 
         return MediaSearchResult(
             trackId: result.trackId,
             mediaKind: result.mediaKind,
             trackName: trimmedTitle.isEmpty ? result.trackName : trimmedTitle,
-            seriesName: normalizedOptional(seriesName) ?? result.seriesName,
-            artistName: normalizedOptional(creator) ?? result.artistName,
+            seriesName: normalizedOptional(seriesName),
+            artistName: normalizedOptional(creator),
             releaseDate: releaseDate,
             primaryGenreName: normalizedOptional(genre),
             shortDescription: normalizedOptional(synopsis),
@@ -63,8 +67,8 @@ struct MetadataDraft: Equatable, Sendable {
             matchConfidence: result.matchConfidence,
             matchSummary: result.matchSummary,
             matchScore: result.matchScore,
-            seasonNumber: normalizedInteger(seasonNumber) ?? result.seasonNumber,
-            episodeNumber: normalizedInteger(episodeNumber) ?? result.episodeNumber
+            seasonNumber: normalizedInteger(seasonNumber),
+            episodeNumber: normalizedInteger(episodeNumber)
         )
     }
 
@@ -88,10 +92,10 @@ struct MetadataDraft: Equatable, Sendable {
         return integer
     }
 
-    private func normalizedReleaseDate(from value: String, fallback: String?) -> String? {
+    private func normalizedReleaseDate(from value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            return fallback
+            return nil
         }
 
         if trimmed.range(of: #"^\d{4}$"#, options: .regularExpression) != nil {

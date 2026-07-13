@@ -38,6 +38,7 @@ struct MetadataWriteOutcome: Sendable {
     let path: MetadataWritePath
     let includedArtwork: Bool
     let backupURL: URL?
+    let verifiedSnapshot: MP4CurrentMetadataSnapshot
 }
 
 struct SaveReport: Identifiable, Sendable {
@@ -90,10 +91,7 @@ struct SaveReport: Identifiable, Sendable {
                 entry.fileURL.path,
             ]
         }
-        let csv = ([header] + rows)
-            .map { $0.map(Self.csvEscaped).joined(separator: ",") }
-            .joined(separator: "\n")
-        return Data((csv + "\n").utf8)
+        return CSVEncoding.data(rows: [header] + rows)
     }
 
     func jsonData() throws -> Data {
@@ -108,12 +106,6 @@ struct SaveReport: Identifiable, Sendable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         return try encoder.encode(payload)
-    }
-
-    private static func csvEscaped(_ value: String) -> String {
-        let needsQuotes = value.contains(",") || value.contains("\"") || value.contains("\n")
-        let escaped = value.replacingOccurrences(of: "\"", with: "\"\"")
-        return needsQuotes ? "\"\(escaped)\"" : escaped
     }
 
     private struct ExportPayload: Encodable {

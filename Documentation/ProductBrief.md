@@ -38,6 +38,7 @@ Converted MP4 files often have poor or missing metadata. MetaFetch helps users i
 - `SaveReport`: Verified write outcome, path used, timing, poster state, retry information, and export data.
 - `ProviderHealthRecord`: Local provider success/failure counters for support and troubleshooting.
 - `TaggingHistoryRecord`: Local history of recent verified saves.
+- `TransactionalFileReplacement`: Atomic replacement and hidden rollback journal lifecycle for rewritten containers.
 
 ## Important Edge Cases
 
@@ -46,9 +47,10 @@ Converted MP4 files often have poor or missing metadata. MetaFetch helps users i
 - TV filenames may omit show names, use unusual episode codes, include specials, rely on folder context, or point to episodes that providers list under a rebranded show or different season.
 - Artwork can be missing, oversized, redirected, invalid, or too large for fast MP4 header updates.
 - MP4 containers may lack metadata headroom or use layouts that require a full rewrite.
-- Saves can fail verification, be interrupted, or appear successful unless the app reads tags back afterward.
+- Saves can fail verification or be interrupted; MetaFetch must restore bounded in-place changes or retain a transactional rollback copy until all requested tags verify.
+- Existing MP4s can contain third-party metadata that must survive MetaFetch-managed tag replacement.
 - Rename templates can collide with existing filenames or generate unsafe names.
-- Update downloads can be missing, oversized, unsigned, or require user-confirmed installation.
+- Update downloads can be missing, oversized, checksum-mismatched, signed by the wrong team, or require user-confirmed installation.
 
 ## Assumptions
 

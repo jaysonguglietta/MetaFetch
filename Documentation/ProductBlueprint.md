@@ -65,10 +65,12 @@ The first screen is the working app experience: choose `Movie` or `TV Show`, the
 - `MediaSearchResult`: A normalized metadata result from Wikipedia/Wikimedia, optional TMDb/OMDb, or TVMaze, including title, description, media kind, artwork URL, source URL, match quality, sort fields, and episode fields.
 - `TVBatchTab`: The batch workspace sections used to keep multi-episode tagging reviewable.
 - `MovieSearchService`: Network metadata lookups, provider-specific parsing, ranking, and result normalization.
+- `MetadataNetworkSupport`: Bounded JSON streaming plus coalesced, expiring TVMaze response caching for season-sized imports.
 - `ArtworkPipeline`: Bounded artwork fetch, MIME and host validation, downsampling, caching, and eviction.
-- `MP4MetadataWriter`: Native MP4 atom write path, verification, and fallback container rewrite behavior.
+- `MP4MetadataWriter`: Native MP4 atom write path, full requested-field verification, and fallback container rewrite behavior.
 - `MP4CurrentMetadataReader`: Reads existing MP4 metadata atoms for true current-tags versus final-tags preview.
-- `UpdateService`: GitHub Releases version comparison, bounded asset download, and reveal-in-Finder install handoff.
+- `TransactionalFileReplacement`: Hidden same-directory rollback journals for verified container replacement.
+- `UpdateService`: GitHub Releases version comparison, bounded asset download, SHA-256 and DMG signature verification, and reveal-in-Finder install handoff.
 - `MetadataDraft`: Editable per-file metadata applied over the selected provider result before writing.
 - `ProviderHealthHistory`: Local searched/skipped/failed provider counters for troubleshooting.
 - `TaggingHistoryStore`: Short local list of recently verified saves.
@@ -88,8 +90,8 @@ The first screen is the working app experience: choose `Movie` or `TV Show`, the
 - TV filenames can omit show names, use folder context, include specials, have malformed episode codes, or refer to episodes that TVMaze lists under a rebranded show or different season.
 - Artwork can be absent, oversized, redirected to an unexpected host, invalid image data, or slow to download.
 - MP4 files can have no metadata headroom, oversized `moov` atoms, unusual atom nesting, or layouts that require a full container rewrite.
-- Save operations can be cancelled, interrupted, fail verification, or leave the user unsure whether tags persisted unless the app reads back after writing.
-- Update releases can have no installable asset, oversized downloads, invalid URLs, or versions that compare differently with and without a leading `v`.
+- Save operations can be cancelled, interrupted, fail verification, or damage prior metadata unless writes preserve unknown atoms and roll back before reporting failure.
+- Update releases can have no installable asset, missing or mismatched checksum sidecars, invalid signatures, oversized downloads, invalid URLs, or versions that compare differently with and without a leading `v`.
 - Rename-after-save templates can collide with existing filenames or produce unsafe names; MetaFetch sanitizes names and adds suffixes.
 - Watch folders can contain duplicates or unsupported files; MetaFetch imports only new validated MP4 files and leaves duplicates alone.
 

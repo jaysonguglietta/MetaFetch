@@ -46,6 +46,29 @@ struct MP4MetadataWriter: MetadataWriting {
 
     private let outputFileType: AVFileType = .mp4
     private let atomWriter = MP4AtomMetadataWriter()
+    private static let managedMetadataIdentifiers: Set<AVMetadataIdentifier> = [
+        .commonIdentifierArtwork,
+        .commonIdentifierCreationDate,
+        .commonIdentifierCreator,
+        .commonIdentifierDescription,
+        .commonIdentifierPublisher,
+        .commonIdentifierTitle,
+        .iTunesMetadataAlbum,
+        .iTunesMetadataAlbumArtist,
+        .iTunesMetadataCoverArt,
+        .iTunesMetadataDescription,
+        .iTunesMetadataDirector,
+        .iTunesMetadataSongName,
+        .iTunesMetadataTrackSubTitle,
+        .iTunesMetadataUserGenre,
+        .quickTimeMetadataArtwork,
+        .quickTimeUserDataAlbum,
+        .quickTimeUserDataComment,
+        .quickTimeUserDataFullName,
+        .quickTimeUserDataGenre,
+        .quickTimeUserDataInformation,
+        .quickTimeUserDataPublisher,
+    ]
 
     func writeMetadata(
         to fileURL: URL,
@@ -77,40 +100,28 @@ struct MP4MetadataWriter: MetadataWriting {
             requiresArtwork: includeArtwork
         )
 
-        if let nativePath = await attemptNativeAtomWrite(
+        if let nativePath = try await attemptNativeAtomWrite(
             to: fileURL,
             using: result,
             artworkData: artworkData,
             verificationExpectation: verificationExpectation,
             progressHandler: progressHandler
         ) {
+            let verifiedSnapshot = try atomWriter.currentMetadataSnapshot(at: fileURL)
             return MetadataWriteOutcome(
                 path: nativePath,
                 includedArtwork: includeArtwork,
-                backupURL: backupURL
+                backupURL: backupURL,
+                verifiedSnapshot: verifiedSnapshot
             )
-        }
-
-        let metadataItems = try await buildMetadataItems(for: result, includeArtwork: includeArtwork)
-
-        if !includeArtwork {
-            let usedFastPath = await attemptMetadataOnlyFastPath(
-                to: fileURL,
-                metadataItems: metadataItems,
-                verificationExpectation: verificationExpectation,
-                progressHandler: progressHandler
-            )
-
-            if usedFastPath {
-                return MetadataWriteOutcome(
-                    path: .nativeMetadataOnly,
-                    includedArtwork: includeArtwork,
-                    backupURL: backupURL
-                )
-            }
         }
 
         let asset = AVURLAsset(url: fileURL)
+        let newMetadataItems = try await buildMetadataItems(for: result, includeArtwork: includeArtwork)
+        let metadataItems = try await mergedMetadataItems(
+            from: asset,
+            replacingWith: newMetadataItems
+        )
 
         guard let exportSession = AVAssetExportSession(
             asset: asset,
@@ -126,6 +137,9 @@ struct MP4MetadataWriter: MetadataWriting {
         let temporaryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension("mp4")
+        defer {
+            try? FileManager.default.removeItem(at: temporaryURL)
+        }
 
         exportSession.shouldOptimizeForNetworkUse = false
         exportSession.metadata = metadataItems
@@ -147,29 +161,26 @@ struct MP4MetadataWriter: MetadataWriting {
             message: "Replacing the original file with the tagged copy"
         ))
 
-        _ = try FileManager.default.replaceItemAt(
-            fileURL,
-            withItemAt: temporaryURL,
-            backupItemName: nil,
-            options: []
-        )
-
-        await progressHandler?(makeProgressUpdate(
-            fractionCompleted: 0.99,
-            message: "Verifying saved metadata"
-        ))
-
-        guard await metadataWasPersisted(
-            at: fileURL,
-            expectation: verificationExpectation
-        ) else {
-            throw WriterError.metadataVerificationFailed
+        try await TransactionalFileReplacement.install(
+            preparedFileURL: temporaryURL,
+            replacing: fileURL
+        ) {
+            await progressHandler?(makeProgressUpdate(
+                fractionCompleted: 0.99,
+                message: "Verifying every saved metadata field"
+            ))
+            return await metadataWasPersisted(
+                at: fileURL,
+                expectation: verificationExpectation
+            )
         }
 
+        let verifiedSnapshot = try await MP4CurrentMetadataReader().read(from: fileURL)
         return MetadataWriteOutcome(
             path: .avFoundationRewrite,
             includedArtwork: includeArtwork,
-            backupURL: backupURL
+            backupURL: backupURL,
+            verifiedSnapshot: verifiedSnapshot
         )
     }
 
@@ -201,7 +212,7 @@ struct MP4MetadataWriter: MetadataWriting {
         artworkData: Data?,
         verificationExpectation: MetadataVerificationExpectation,
         progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)?
-    ) async -> MetadataWritePath? {
+    ) async throws -> MetadataWritePath? {
         await progressHandler?(makeProgressUpdate(
             fractionCompleted: 0.04,
             message: "Preparing native MP4 metadata writer"
@@ -237,81 +248,23 @@ struct MP4MetadataWriter: MetadataWriting {
             ))
             return path
         } catch {
+            if let replacementError = error as? TransactionalFileReplacement.ReplacementError {
+                switch replacementError {
+                case .verificationFailed:
+                    break
+                case .rollbackUnavailable, .rollbackFailed:
+                    throw error
+                }
+            }
+            if let atomError = error as? MP4AtomMetadataWriter.AtomWriterError,
+               case .rollbackFailed = atomError {
+                throw error
+            }
             await progressHandler?(makeProgressUpdate(
                 fractionCompleted: 0.08,
                 message: "Native MP4 writer could not update this file, falling back to AVFoundation"
             ))
             return nil
-        }
-    }
-
-    private func attemptMetadataOnlyFastPath(
-        to fileURL: URL,
-        metadataItems: [AVMetadataItem],
-        verificationExpectation: MetadataVerificationExpectation,
-        progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)?
-    ) async -> Bool {
-        await progressHandler?(makeProgressUpdate(
-            fractionCompleted: 0.04,
-            message: "Trying metadata-only fast path"
-        ))
-
-        do {
-            let movie = try loadMutableMovie(at: fileURL)
-
-            guard movie.is(compatibleWithFileType: outputFileType) else {
-                await progressHandler?(makeProgressUpdate(
-                    fractionCompleted: 0.08,
-                    message: "Fast path not supported for this MP4, falling back to full rewrite"
-                ))
-                return false
-            }
-
-            await progressHandler?(makeProgressUpdate(
-                fractionCompleted: 0.16,
-                message: "Applying metadata to the movie header"
-            ))
-
-            movie.metadata = metadataItems
-
-            await progressHandler?(makeProgressUpdate(
-                fractionCompleted: 0.72,
-                message: "Writing updated movie header without rewriting media"
-            ))
-
-            try movie.writeHeader(
-                to: fileURL,
-                fileType: outputFileType,
-                options: .addMovieHeaderToDestination
-            )
-
-            await progressHandler?(makeProgressUpdate(
-                fractionCompleted: 0.88,
-                message: "Verifying metadata-only save"
-            ))
-
-            guard await metadataWasPersisted(
-                at: fileURL,
-                expectation: verificationExpectation
-            ) else {
-                await progressHandler?(makeProgressUpdate(
-                    fractionCompleted: 0.08,
-                    message: "Metadata-only save did not verify, falling back to full rewrite"
-                ))
-                return false
-            }
-
-            await progressHandler?(makeProgressUpdate(
-                fractionCompleted: 1,
-                message: "Finished metadata-only fast save"
-            ))
-            return true
-        } catch {
-            await progressHandler?(makeProgressUpdate(
-                fractionCompleted: 0.08,
-                message: "Fast path failed, falling back to full container rewrite"
-            ))
-            return false
         }
     }
 
@@ -364,8 +317,7 @@ struct MP4MetadataWriter: MetadataWriting {
             stringItem(identifier: .iTunesMetadataSongName, value: result.trackName),
         ]
 
-        let synopsis = result.synopsis.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !synopsis.isEmpty {
+        if let synopsis = result.persistableSynopsis {
             items.append(stringItem(identifier: .commonIdentifierDescription, value: synopsis))
             items.append(stringItem(identifier: .quickTimeUserDataInformation, value: synopsis))
             items.append(stringItem(identifier: .iTunesMetadataDescription, value: synopsis))
@@ -430,8 +382,18 @@ struct MP4MetadataWriter: MetadataWriting {
         return items
     }
 
-    private func loadMutableMovie(at fileURL: URL) throws -> AVMutableMovie {
-        AVMutableMovie(url: fileURL, options: nil)
+    private func mergedMetadataItems(
+        from asset: AVURLAsset,
+        replacingWith newItems: [AVMetadataItem]
+    ) async throws -> [AVMetadataItem] {
+        let existingItems = try await asset.load(.metadata)
+        let preservedItems = existingItems.filter { item in
+            guard let identifier = item.identifier else {
+                return true
+            }
+            return !Self.managedMetadataIdentifiers.contains(identifier)
+        }
+        return preservedItems + newItems
     }
 
     private func export(
@@ -656,11 +618,10 @@ private struct MetadataVerificationExpectation {
     init(result: MediaSearchResult, requiresArtwork: Bool) {
         self.result = result
         self.requiresArtwork = requiresArtwork
-        self.requiresPreciseAtomVerification = result.mediaKind == .tvEpisode &&
-            (result.seasonNumber != nil || result.episodeNumber != nil)
+        self.requiresPreciseAtomVerification = true
 
-        // Keep verification conservative: long descriptions and specialty atoms can be normalized
-        // differently by AVFoundation, but title/album atoms should survive every successful save.
+        // Precise atom verification prevents AVFoundation normalization from being mistaken for a
+        // successful save when any requested Apple/iTunes field is absent.
         var requiredStrings = [
             RequiredString(
                 value: result.trackName,

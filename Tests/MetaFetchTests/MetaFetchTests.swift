@@ -793,6 +793,189 @@ final class MetaFetchTests: XCTestCase {
         XCTAssertEqual(metadataWriter.savedArtworkURLs, [seriesArtworkURL])
         XCTAssertEqual(metadataWriter.calls.map(\.includeArtwork), [true])
     }
+
+    func testMetadataDraftCanExplicitlyClearOptionalFields() {
+        let result = makeEpisodeResult(id: 700, title: "Episode", episodeNumber: 3)
+        var draft = MetadataDraft(result: result)
+        draft.seriesName = ""
+        draft.creator = ""
+        draft.genre = ""
+        draft.year = ""
+        draft.synopsis = ""
+        draft.sortTitle = ""
+        draft.sortSeriesName = ""
+        draft.seasonNumber = ""
+        draft.episodeNumber = ""
+
+        let applied = draft.applying(to: result)
+
+        XCTAssertNil(applied.seriesName)
+        XCTAssertNil(applied.artistName)
+        XCTAssertNil(applied.primaryGenreName)
+        XCTAssertNil(applied.releaseDate)
+        XCTAssertNil(applied.persistableSynopsis)
+        XCTAssertNil(applied.sortTitle)
+        XCTAssertNil(applied.sortSeriesName)
+        XCTAssertNil(applied.seasonNumber)
+        XCTAssertNil(applied.episodeNumber)
+    }
+
+    func testMissingSynopsisPlaceholderIsNotPersistableMetadata() {
+        let result = MediaSearchResult(
+            trackId: 701,
+            mediaKind: .movie,
+            trackName: "No Description Movie",
+            seriesName: nil,
+            artistName: nil,
+            releaseDate: nil,
+            primaryGenreName: nil,
+            shortDescription: nil,
+            longDescription: nil,
+            contentAdvisoryRating: nil,
+            artworkURL: nil,
+            sourceURL: nil,
+            sourceName: "Test",
+            matchConfidence: .possible,
+            matchSummary: "Test",
+            matchScore: 1,
+            seasonNumber: nil,
+            episodeNumber: nil
+        )
+
+        XCTAssertEqual(result.synopsis, "No synopsis was returned for this title.")
+        XCTAssertNil(result.persistableSynopsis)
+        XCTAssertEqual(MetadataDraft(result: result).synopsis, "")
+    }
+
+    func testCSVEncodingNeutralizesSpreadsheetFormulas() throws {
+        let report = SaveReport(
+            createdAt: Date(timeIntervalSince1970: 0),
+            entries: [
+                SaveReportEntry(
+                    filename: "=HYPERLINK(\"https://example.com\")",
+                    fileURL: URL(fileURLWithPath: "/tmp/@episode.mp4"),
+                    title: "+SUM(1,1)",
+                    outcome: nil,
+                    errorMessage: "-1+1",
+                    duration: 0
+                ),
+            ]
+        )
+
+        let csv = try XCTUnwrap(String(data: report.csvData(), encoding: .utf8))
+        XCTAssertTrue(csv.contains("'=HYPERLINK"))
+        XCTAssertTrue(csv.contains("'+SUM"))
+        XCTAssertTrue(csv.contains("'-1+1"))
+    }
+
+    func testTransactionalReplacementRestoresOriginalWhenVerificationFails() async throws {
+        let directory = try makeTemporaryDirectory(prefix: "MetaFetchReplacementTests")
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let originalURL = directory.appendingPathComponent("movie.mp4")
+        let replacementURL = directory.appendingPathComponent("replacement.mp4")
+        try Data("original".utf8).write(to: originalURL)
+        try Data("replacement".utf8).write(to: replacementURL)
+
+        do {
+            try await TransactionalFileReplacement.install(
+                preparedFileURL: replacementURL,
+                replacing: originalURL
+            ) {
+                false
+            }
+            XCTFail("Expected verification to fail.")
+        } catch TransactionalFileReplacement.ReplacementError.verificationFailed {
+            XCTAssertEqual(try Data(contentsOf: originalURL), Data("original".utf8))
+            let leftovers = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+                .filter { $0.contains("metafetch-rollback") }
+            XCTAssertTrue(leftovers.isEmpty)
+        }
+    }
+
+    func testTransactionalReplacementCommitsVerifiedFileAndPreservesOlderRecoveryJournal() async throws {
+        let directory = try makeTemporaryDirectory(prefix: "MetaFetchReplacementCommitTests")
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let originalURL = directory.appendingPathComponent("movie.mp4")
+        let replacementURL = directory.appendingPathComponent("replacement.mp4")
+        let olderRecoveryURL = directory.appendingPathComponent(".movie.mp4.metafetch-rollback-older")
+        try Data("original".utf8).write(to: originalURL)
+        try Data("replacement".utf8).write(to: replacementURL)
+        try Data("older recovery".utf8).write(to: olderRecoveryURL)
+
+        try await TransactionalFileReplacement.install(
+            preparedFileURL: replacementURL,
+            replacing: originalURL
+        ) {
+            true
+        }
+
+        XCTAssertEqual(try Data(contentsOf: originalURL), Data("replacement".utf8))
+        XCTAssertEqual(try Data(contentsOf: olderRecoveryURL), Data("older recovery".utf8))
+        let rollbackFiles = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.contains("metafetch-rollback") }
+        XCTAssertEqual(rollbackFiles, [olderRecoveryURL.lastPathComponent])
+    }
+
+    func testExpectedSnapshotUsesWriterSemanticsForTVSeries() {
+        let result = makeResult(
+            id: 703,
+            title: "The Audacity",
+            year: "2026",
+            mediaKind: .tvSeries,
+            confidence: .exact,
+            summary: "Exact",
+            score: 200
+        )
+
+        let snapshot = MP4CurrentMetadataSnapshot(result: result, hasArtwork: false)
+
+        XCTAssertEqual(snapshot.title, "The Audacity")
+        XCTAssertEqual(snapshot.seriesName, "The Audacity")
+        XCTAssertEqual(snapshot.sortTitle, "The Audacity")
+        XCTAssertEqual(snapshot.sortSeriesName, "The Audacity")
+    }
+
+    func testNativeAtomWriterPreservesUnknownMetadataItems() async throws {
+        let directory = try makeTemporaryDirectory(prefix: "MetaFetchMetadataMergeTests")
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let marker = Data("preserve-me".utf8)
+        var dataPayload = Data(count: 8)
+        dataPayload.append(marker)
+        let unknownItem = makeTestAtom("xxyz", payload: makeTestAtom("data", payload: dataPayload))
+        var metaPayload = makeTestUInt32Data(0)
+        metaPayload.append(makeTestAtom("ilst", payload: unknownItem))
+        let userData = makeTestAtom("udta", payload: makeTestAtom("meta", payload: metaPayload))
+
+        var mp4 = Data()
+        mp4.append(makeTestAtom("ftyp", payload: Data("isom0000".utf8)))
+        mp4.append(makeTestAtom("moov", payload: userData))
+        mp4.append(makeTestAtom("free", payload: Data(count: 8192)))
+        mp4.append(makeTestAtom("mdat", payload: Data()))
+        let fileURL = directory.appendingPathComponent("movie.mp4")
+        try mp4.write(to: fileURL)
+
+        _ = try await MP4AtomMetadataWriter().writeMetadata(
+            to: fileURL,
+            using: makeResult(
+                id: 702,
+                title: "Merged Movie",
+                year: "1999",
+                confidence: .exact,
+                summary: "Exact",
+                score: 200
+            ),
+            artworkData: nil
+        )
+
+        XCTAssertNotNil(try Data(contentsOf: fileURL).range(of: marker))
+    }
 }
 
 private func makeResult(
@@ -952,7 +1135,11 @@ private final class RecordingMetadataWriter: MetadataWriting, @unchecked Sendabl
         return MetadataWriteOutcome(
             path: .nativeMetadataOnly,
             includedArtwork: includeArtwork,
-            backupURL: nil
+            backupURL: nil,
+            verifiedSnapshot: MP4CurrentMetadataSnapshot(
+                result: result,
+                hasArtwork: includeArtwork
+            )
         )
     }
 }

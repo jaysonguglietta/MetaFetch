@@ -96,11 +96,13 @@ struct MediaSearchResult: Hashable, Identifiable, Sendable {
     }
 
     var synopsis: String {
-        let preferred = [longDescription, shortDescription]
+        persistableSynopsis ?? "No synopsis was returned for this title."
+    }
+
+    var persistableSynopsis: String? {
+        [longDescription, shortDescription]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first(where: { !$0.isEmpty })
-
-        return preferred ?? "No synopsis was returned for this title."
     }
 
     var subtitleLine: String {
@@ -1327,11 +1329,10 @@ private struct TVMazeSearchService {
             for hit in hits {
                 group.addTask {
                     do {
-                        guard let episode = try await fetchEpisode(
-                            forShowID: hit.show.id,
-                            seasonNumber: seasonNumber,
-                            episodeNumber: episodeNumber
-                        ) else {
+                        let episodes = try await fetchEpisodes(forShowID: hit.show.id)
+                        guard let episode = episodes.first(where: {
+                            $0.season == seasonNumber && $0.number == episodeNumber
+                        }) else {
                             return nil
                         }
 
@@ -1356,27 +1357,6 @@ private struct TVMazeSearchService {
 
             return matches
         }
-    }
-
-    private func fetchEpisode(
-        forShowID showID: Int,
-        seasonNumber: Int,
-        episodeNumber: Int
-    ) async throws -> TVMazeEpisode? {
-        guard var components = URLComponents(string: "https://api.tvmaze.com/shows/\(showID)/episodebynumber") else {
-            throw SearchError.invalidURL
-        }
-
-        components.queryItems = [
-            URLQueryItem(name: "season", value: String(seasonNumber)),
-            URLQueryItem(name: "number", value: String(episodeNumber)),
-        ]
-
-        guard let url = components.url else {
-            throw SearchError.invalidURL
-        }
-
-        return try await performOptionalRequest(url, decoding: TVMazeEpisode.self)
     }
 
     private func fetchEpisodeTitleMatches(
@@ -1438,45 +1418,12 @@ private struct TVMazeSearchService {
             forHTTPHeaderField: "User-Agent"
         )
 
-        let (data, response) = try await BoundedJSONRequest.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw SearchError.invalidResponse
+        let response = try await TVMazeResponseCache.shared.response(for: request)
+        guard (200..<300).contains(response.statusCode) else {
+            throw SearchError.requestFailed(statusCode: response.statusCode)
         }
 
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            throw SearchError.requestFailed(statusCode: httpResponse.statusCode)
-        }
-
-        return try JSONDecoder().decode(Response.self, from: data)
-    }
-
-    private func performOptionalRequest<Response: Decodable>(
-        _ url: URL,
-        decoding type: Response.Type
-    ) async throws -> Response? {
-        var request = URLRequest(url: url)
-        request.timeoutInterval = BoundedJSONRequest.timeoutInterval
-        request.setValue(
-            "MetaFetch/1.1 (macOS app for tagging MP4 movie files and TV episodes)",
-            forHTTPHeaderField: "User-Agent"
-        )
-
-        let (data, response) = try await BoundedJSONRequest.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw SearchError.invalidResponse
-        }
-
-        if httpResponse.statusCode == 404 {
-            return nil
-        }
-
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            throw SearchError.requestFailed(statusCode: httpResponse.statusCode)
-        }
-
-        return try JSONDecoder().decode(Response.self, from: data)
+        return try JSONDecoder().decode(Response.self, from: response.data)
     }
 
     private func buildEpisodeResult(
@@ -1873,31 +1820,4 @@ private func evaluateProviderMatch(
     }
 
     return (score, confidence, summary)
-}
-
-private enum BoundedJSONRequest {
-    static let timeoutInterval: TimeInterval = 15
-    private static let maximumResponseBytes = 4 * 1024 * 1024
-
-    static func data(for request: URLRequest) async throws -> (Data, URLResponse) {
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
-
-        if response.expectedContentLength > maximumResponseBytes {
-            throw URLError(.dataLengthExceedsMaximum)
-        }
-
-        var data = Data()
-        if response.expectedContentLength > 0 {
-            data.reserveCapacity(min(Int(response.expectedContentLength), maximumResponseBytes))
-        }
-
-        for try await byte in bytes {
-            data.append(byte)
-            if data.count > maximumResponseBytes {
-                throw URLError(.dataLengthExceedsMaximum)
-            }
-        }
-
-        return (data, response)
-    }
 }
