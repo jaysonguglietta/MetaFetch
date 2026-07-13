@@ -93,6 +93,8 @@ Release date accepts `YYYY`, `YYYY-MM-DD`, or a full ISO date. Year-only entries
 
 The `Tag Preview Diff` panel compares the current MP4 tags with the final edited values when MetaFetch can read existing tags. If no existing tags are readable, it falls back to comparing provider values with the final edited values. Use it as a last sanity check before saving, especially after manual edits or batch-applied series choices.
 
+If a single-file save needs attention, the save button remains clickable and the exact blocking reason appears beneath it. Clicking it also opens a save report with the same recovery guidance. Batch saves remain limited to rows whose metadata is already valid and confirmed.
+
 ## Metadata Providers
 
 Movie search works without setup through Wikipedia/Wikimedia. TV search works without setup through TVMaze.

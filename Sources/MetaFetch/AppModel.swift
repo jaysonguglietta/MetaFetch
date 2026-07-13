@@ -465,6 +465,12 @@ final class AppModel: ObservableObject {
 
     @discardableResult
     func save(file: MovieFileEntry) async -> Bool {
+        guard !file.isSaving else {
+            return false
+        }
+        file.errorMessage = nil
+        file.statusMessage = "Starting metadata save"
+
         let reportEntry = await saveAndBuildReportEntry(file: file)
         let report = SaveReport(createdAt: Date(), entries: [reportEntry])
         lastSaveReport = report
@@ -535,10 +541,9 @@ final class AppModel: ObservableObject {
             )
         }
 
-        guard file.metadataDraft.isValid(for: selectedResult) else {
-            let message = "Enter a title before saving metadata."
+        if let message = file.metadataDraft.validationError(for: selectedResult) {
             file.errorMessage = message
-            file.statusMessage = "Metadata editor needs a title"
+            file.statusMessage = "Review the metadata editor"
             return SaveReportEntry(
                 filename: file.filename,
                 fileURL: file.fileURL,

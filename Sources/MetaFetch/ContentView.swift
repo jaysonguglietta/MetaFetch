@@ -2254,8 +2254,8 @@ private struct MetadataEditorCard: View {
                 }
             }
 
-            if !entry.metadataDraft.isValid(for: entry.selectedResult) {
-                Text("A title is required. Release date may be blank, `YYYY`, `YYYY-MM-DD`, or a full ISO date.")
+            if let validationError = entry.metadataDraft.validationError(for: entry.selectedResult) {
+                Text(validationError)
                     .font(RetroTheme.bodyFont(12))
                     .foregroundStyle(RetroTheme.gold)
             }
@@ -2690,8 +2690,17 @@ private struct SelectionPreviewCard: View {
                     }
                 }
                 .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.lime))
-                .disabled(!entry.canSave)
+                .disabled(!entry.canAttemptSingleSave)
+                .help(entry.saveBlockingReason ?? "Writes the selected metadata and poster to this MP4.")
                 .accessibilityHint("Writes the selected metadata to \(entry.filename).")
+
+                if let saveBlockingReason = entry.saveBlockingReason {
+                    Label(saveBlockingReason, systemImage: "exclamationmark.triangle.fill")
+                        .font(RetroTheme.bodyFont(12))
+                        .foregroundStyle(RetroTheme.gold)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel("Save blocked: \(saveBlockingReason)")
+                }
 
                 if entry.isSaving {
                     VStack(alignment: .leading, spacing: 10) {

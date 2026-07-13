@@ -71,6 +71,20 @@ final class MovieFileEntry: ObservableObject, Identifiable {
         metadataDraft.isValid(for: selectedResult) && !isSaving && !requiresSeriesOnlySaveConfirmation
     }
 
+    var canAttemptSingleSave: Bool {
+        selectedResult != nil && !isSaving
+    }
+
+    var saveBlockingReason: String? {
+        if let validationError = metadataDraft.validationError(for: selectedResult) {
+            return validationError
+        }
+        if requiresSeriesOnlySaveConfirmation {
+            return "Confirm the series-only TV match before saving this episode."
+        }
+        return nil
+    }
+
     var hasSelectedArtwork: Bool {
         selectedArtworkURL != nil
     }

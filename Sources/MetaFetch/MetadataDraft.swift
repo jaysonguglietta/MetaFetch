@@ -32,17 +32,30 @@ struct MetadataDraft: Equatable, Sendable {
     }
 
     func isValid(for result: MediaSearchResult?) -> Bool {
+        validationError(for: result) == nil
+    }
+
+    func validationError(for result: MediaSearchResult?) -> String? {
         guard result != nil else {
-            return false
+            return "Select a metadata match before saving."
+        }
+        guard !trimmedTitle.isEmpty else {
+            return "Enter a title before saving metadata."
         }
 
         let trimmedReleaseDate = year.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedSeason = seasonNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedEpisode = episodeNumber.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmedTitle.isEmpty &&
-            (trimmedReleaseDate.isEmpty || normalizedReleaseDate(from: year) != nil) &&
-            (trimmedSeason.isEmpty || normalizedInteger(seasonNumber) != nil) &&
-            (trimmedEpisode.isEmpty || normalizedInteger(episodeNumber) != nil)
+        if !trimmedReleaseDate.isEmpty && normalizedReleaseDate(from: year) == nil {
+            return "Use YYYY, YYYY-MM-DD, or a full ISO date for Release Date."
+        }
+        if !trimmedSeason.isEmpty && normalizedInteger(seasonNumber) == nil {
+            return "Season must be a positive whole number."
+        }
+        if !trimmedEpisode.isEmpty && normalizedInteger(episodeNumber) == nil {
+            return "Episode must be a positive whole number."
+        }
+        return nil
     }
 
     func applying(to result: MediaSearchResult) -> MediaSearchResult {

@@ -939,6 +939,78 @@ final class MetaFetchTests: XCTestCase {
         XCTAssertEqual(snapshot.sortSeriesName, "The Audacity")
     }
 
+    @MainActor
+    func testInvalidSingleFileSaveRemainsActionableAndReportsExactReason() async throws {
+        let directory = try makeTemporaryDirectory(prefix: "MetaFetchSaveFeedbackTests")
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let fileURL = directory.appendingPathComponent("Movie.mp4")
+        FileManager.default.createFile(atPath: fileURL.path, contents: Data([0x00]))
+
+        let writer = RecordingMetadataWriter()
+        let model = AppModel(searchService: StubSearchService(results: []), metadataWriter: writer)
+        let entry = MovieFileEntry(fileURL: fileURL, mediaMode: .movie)
+        entry.selectedResult = makeResult(
+            id: 704,
+            title: "Movie",
+            year: "2026",
+            confidence: .exact,
+            summary: "Exact",
+            score: 200
+        )
+        entry.metadataDraft.year = "not-a-date"
+
+        XCTAssertFalse(entry.canSave)
+        XCTAssertTrue(entry.canAttemptSingleSave)
+        XCTAssertEqual(
+            entry.saveBlockingReason,
+            "Use YYYY, YYYY-MM-DD, or a full ISO date for Release Date."
+        )
+
+        let saved = await model.save(file: entry)
+
+        XCTAssertFalse(saved)
+        XCTAssertTrue(writer.calls.isEmpty)
+        XCTAssertEqual(model.lastSaveReport?.failureCount, 1)
+        XCTAssertEqual(entry.statusMessage, "Review the metadata editor")
+        XCTAssertEqual(entry.errorMessage, entry.saveBlockingReason)
+    }
+
+    func testNativeAtomWriterPersistsAndVerifiesPosterArtwork() async throws {
+        let directory = try makeTemporaryDirectory(prefix: "MetaFetchPosterWriterTests")
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        var mp4 = Data()
+        mp4.append(makeTestAtom("ftyp", payload: Data("isom0000".utf8)))
+        mp4.append(makeTestAtom("moov", payload: Data()))
+        mp4.append(makeTestAtom("free", payload: Data(count: 32 * 1024)))
+        mp4.append(makeTestAtom("mdat", payload: Data()))
+        let fileURL = directory.appendingPathComponent("Poster.Movie.mp4")
+        try mp4.write(to: fileURL)
+        let result = makeResult(
+            id: 705,
+            title: "Poster Movie",
+            year: "2026",
+            confidence: .exact,
+            summary: "Exact",
+            score: 200
+        )
+
+        _ = try await MP4AtomMetadataWriter().writeMetadata(
+            to: fileURL,
+            using: result,
+            artworkData: minimalPNGData()
+        )
+
+        let snapshot = try MP4AtomMetadataWriter().currentMetadataSnapshot(at: fileURL)
+        XCTAssertTrue(snapshot.hasArtwork)
+        XCTAssertTrue(snapshot.verification(against: result, expectsArtwork: true).isVerified)
+        XCTAssertNotNil(try Data(contentsOf: fileURL).range(of: Data("covr".utf8)))
+    }
+
     func testNativeAtomWriterPreservesUnknownMetadataItems() async throws {
         let directory = try makeTemporaryDirectory(prefix: "MetaFetchMetadataMergeTests")
         defer {
