@@ -106,7 +106,7 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
         }
 
         var request = URLRequest(url: url, timeoutInterval: 15)
-        request.setValue("MetaFetch/1.1", forHTTPHeaderField: "User-Agent")
+        request.setValue("MetaFetch/2.0", forHTTPHeaderField: "User-Agent")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
 
         let (data, response) = try await Self.boundedData(
@@ -160,7 +160,7 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
         }
 
         var request = URLRequest(url: asset.downloadURL, timeoutInterval: 120)
-        request.setValue("MetaFetch/1.1", forHTTPHeaderField: "User-Agent")
+        request.setValue("MetaFetch/2.0", forHTTPHeaderField: "User-Agent")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
 
         let expectedChecksum = try await checksum(from: checksumURL)
@@ -280,7 +280,7 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
 
     private func checksum(from url: URL) async throws -> String {
         var request = URLRequest(url: url, timeoutInterval: 15)
-        request.setValue("MetaFetch/1.1", forHTTPHeaderField: "User-Agent")
+        request.setValue("MetaFetch/2.0", forHTTPHeaderField: "User-Agent")
         request.setValue("text/plain", forHTTPHeaderField: "Accept")
         let (data, response) = try await Self.boundedData(for: request, maximumBytes: 16 * 1024)
         try validate(response: response)

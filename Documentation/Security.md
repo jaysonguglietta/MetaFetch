@@ -28,8 +28,8 @@ An abrupt power loss can interrupt any filesystem operation. Keep irreplaceable 
 The updater only accepts trusted GitHub release URLs and bounded installer assets. Every installer must have an exact-name SHA-256 sidecar, for example:
 
 ```text
-MetaFetch-1.1.dmg
-MetaFetch-1.1.dmg.sha256
+MetaFetch-2.0.dmg
+MetaFetch-2.0.dmg.sha256
 ```
 
 DMGs must also pass strict macOS code-signature validation. When the installed app has a Developer ID Team ID, the downloaded DMG must match that team. Installers are moved to Downloads and revealed in Finder; MetaFetch does not open or silently install them.

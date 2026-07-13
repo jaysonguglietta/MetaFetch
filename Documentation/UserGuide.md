@@ -172,7 +172,7 @@ Use the `Help` toolbar button for a quick version of this guide inside MetaFetch
 
 Use `Updates` in the toolbar or `Check for Updates...` from the app menu to ask GitHub whether a newer MetaFetch release is available.
 
-MetaFetch compares the installed app version with the latest release tag in `jaysonguglietta/MetaFetch`. Tags like `v1.1` and `1.1` are both understood as version `1.1`.
+MetaFetch compares the installed app version with the latest release tag in `jaysonguglietta/MetaFetch`. Tags like `v2.0` and `2.0` are both understood as version `2.0`.
 
 If the newer release includes a `.dmg`, `.zip`, or `.pkg` asset plus a matching `<asset-name>.sha256` file, MetaFetch can download it to your Downloads folder and reveal it in Finder. The app verifies the checksum first. DMG files must also have a valid macOS code signature and, for Developer ID builds, match the installed app's signing team. MetaFetch does not open downloaded installers automatically.
 

@@ -87,7 +87,7 @@ Build the local app bundle:
 Build with release version metadata:
 
 ```bash
-APP_VERSION=1.2 APP_BUILD=3 ./Scripts/build_app.sh
+APP_VERSION=2.0 APP_BUILD=3 ./Scripts/build_app.sh
 ```
 
 The local build script now ad-hoc signs the app with hardened runtime by default. For release builds, provide a Developer ID Application identity:
@@ -108,13 +108,13 @@ APP_NOTARY_PROFILE="metafetch-notary" \
 
 ## Updates
 
-MetaFetch checks `jaysonguglietta/MetaFetch` GitHub Releases. A release is considered newer when its tag, such as `v1.1` or `1.1`, is greater than the app’s `CFBundleShortVersionString`.
+MetaFetch checks `jaysonguglietta/MetaFetch` GitHub Releases. A release is considered newer when its tag, such as `v2.0` or `2.0`, is greater than the app’s `CFBundleShortVersionString`.
 
 For in-app downloads, attach an installable asset and its exact-name SHA-256 sidecar to the GitHub release:
 
-- `MetaFetch-1.1.dmg` and `MetaFetch-1.1.dmg.sha256`
-- `MetaFetch-1.1.zip` and `MetaFetch-1.1.zip.sha256`
-- `MetaFetch-1.1.pkg` and `MetaFetch-1.1.pkg.sha256`
+- `MetaFetch-2.0.dmg` and `MetaFetch-2.0.dmg.sha256`
+- `MetaFetch-2.0.zip` and `MetaFetch-2.0.zip.sha256`
+- `MetaFetch-2.0.pkg` and `MetaFetch-2.0.pkg.sha256`
 
 MetaFetch verifies the downloaded bytes against the sidecar before moving the asset to the user’s Downloads folder. DMG downloads must also have a valid macOS code signature; when the installed app has a Developer ID Team ID, the DMG must use the same team. MetaFetch then reveals the asset in Finder without opening it, so the final app replacement remains visible and user-confirmed instead of silently replacing a running app.
 
