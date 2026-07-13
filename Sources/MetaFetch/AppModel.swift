@@ -244,7 +244,7 @@ final class AppModel: ObservableObject {
     }
 
     var currentAppVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.0"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.01"
     }
 
     func chooseMode(_ mode: MediaLibraryMode) {
