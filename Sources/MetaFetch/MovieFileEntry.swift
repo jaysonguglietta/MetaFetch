@@ -38,6 +38,9 @@ final class MovieFileEntry: ObservableObject, Identifiable {
     @Published var headroomInspection: MP4HeadroomInspection?
     @Published var providerDiagnostics = ""
     @Published var isInspectingHeadroom = false
+    @Published var isRepairingHeadroom = false
+    @Published var rawMetadataItems: [MP4RawMetadataItem] = []
+    @Published var rawMetadataError: String?
     @Published var isSearching = false
     @Published var isSaving = false
     @Published var saveProgress: Double?
@@ -47,6 +50,7 @@ final class MovieFileEntry: ObservableObject, Identifiable {
     @Published var lastSavedAt: Date?
     @Published var lastSaveOutcome: MetadataWriteOutcome?
     var searchGeneration = 0
+    let assetRole: MediaAssetRole
 
     init(
         fileURL: URL,
@@ -56,6 +60,7 @@ final class MovieFileEntry: ObservableObject, Identifiable {
         self.fileURL = fileURL
         self.mediaMode = mediaMode
         self.importIdentity = importIdentity
+        self.assetRole = MediaAssetRoleDetector.role(for: fileURL)
         self.queryText = FilenameTitleParser.suggestedQuery(
             fromFileURL: fileURL,
             mode: mediaMode
@@ -70,6 +75,8 @@ final class MovieFileEntry: ObservableObject, Identifiable {
     var canSave: Bool {
         metadataDraft.isValid(for: selectedResult) && !isSaving && !requiresSeriesOnlySaveConfirmation
     }
+
+    var isExtra: Bool { assetRole != .primary }
 
     var canAttemptSingleSave: Bool {
         selectedResult != nil && !isSaving

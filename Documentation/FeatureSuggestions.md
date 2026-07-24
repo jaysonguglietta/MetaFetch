@@ -1,23 +1,23 @@
 # MetaFetch Feature Suggestions
 
-This is a practical roadmap for turning MetaFetch from a fast tagging utility into a calmer, safer media-library tool.
+This roadmap starts after the advanced workflow, recovery, sandbox, and signed-update work shipped in 2.01.
 
 ## Highest Value
 
-- Existing-tag coverage: Expand current-tag reading to additional niche MP4/iTunes atoms that third-party tools write.
-- Headroom auto-remediation: Offer to run a safe local remux command when a file repeatedly needs full rewrites.
+- Provider field merge: Compare Wikipedia, TMDb, and OMDb values side by side and let the user pick the best value per field.
+- Chapter editor: Read, validate, edit, and write chapter markers without disturbing media tracks.
 
 ## Usability Polish
 
-- Better empty states: Show mode-specific examples directly in the drop zone before files are loaded.
-- Sparkle updater: Replace the lightweight GitHub Releases downloader with a fully signed Sparkle appcast for automatic app replacement.
+- Season dry run: Export the reconciliation plan before changing a large folder.
+- Recovery retention: Add a bounded cleanup policy for old user-visible safety backups.
 
 ## Metadata Power Features
 
-- Ratings and content advisory: Save ratings when a source supports them.
-- Chapter and extras awareness: Detect files that look like extras, trailers, or specials and avoid bad auto-matches.
-- Rename preset manager: Save reusable movie and TV filename templates for different libraries.
+- Cast and crew editor: Add structured cast, writer, studio, and production-company fields where target players support them.
+- Artwork variants: Browse provider backdrops, season art, and alternate posters rather than one canonical image.
 
 ## Library Workflow
 
-- Import presets: Remember preferred mode, provider, poster, rename, and backup settings for different workflows.
+- Rules preview: Explain exactly why a confidence rule did or did not auto-select each queued result.
+- Library audit: Scan a selected folder read-only and report missing, inconsistent, or unverifiable tags without importing every row into the save queue.

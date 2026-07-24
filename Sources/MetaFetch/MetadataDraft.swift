@@ -11,6 +11,11 @@ struct MetadataDraft: Equatable, Sendable {
     var sortSeriesName: String = ""
     var seasonNumber: String = ""
     var episodeNumber: String = ""
+    var contentRating: String = ""
+    var communityRating: String = ""
+    var imdbID: String = ""
+    var tmdbID: String = ""
+    var tvmazeID: String = ""
 
     init() {}
 
@@ -25,6 +30,11 @@ struct MetadataDraft: Equatable, Sendable {
         sortSeriesName = result.sortSeriesName ?? result.seriesName ?? ""
         seasonNumber = result.seasonNumber.map(String.init) ?? ""
         episodeNumber = result.episodeNumber.map(String.init) ?? ""
+        contentRating = result.contentAdvisoryRating ?? ""
+        communityRating = result.communityRating.map { String(format: "%.1f", $0) } ?? ""
+        imdbID = result.externalIDs.imdb ?? ""
+        tmdbID = result.externalIDs.tmdb.map(String.init) ?? ""
+        tvmazeID = result.externalIDs.tvmaze.map(String.init) ?? ""
     }
 
     var trimmedTitle: String {
@@ -55,6 +65,22 @@ struct MetadataDraft: Equatable, Sendable {
         if !trimmedEpisode.isEmpty && normalizedInteger(episodeNumber) == nil {
             return "Episode must be a positive whole number."
         }
+        let trimmedCommunityRating = communityRating.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedCommunityRating.isEmpty,
+           (Double(trimmedCommunityRating) == nil || !(0...10).contains(Double(trimmedCommunityRating) ?? -1)) {
+            return "Community rating must be a number from 0 to 10."
+        }
+        let trimmedIMDbID = imdbID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedIMDbID.isEmpty,
+           trimmedIMDbID.range(of: #"^tt\d{5,12}$"#, options: .regularExpression) == nil {
+            return "IMDb ID must look like tt1234567."
+        }
+        for (label, value) in [("TMDb", tmdbID), ("TVMaze", tvmazeID)] {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty && normalizedInteger(value) == nil {
+                return "\(label) ID must be a positive whole number."
+            }
+        }
         return nil
     }
 
@@ -71,7 +97,7 @@ struct MetadataDraft: Equatable, Sendable {
             primaryGenreName: normalizedOptional(genre),
             shortDescription: normalizedOptional(synopsis),
             longDescription: normalizedOptional(synopsis),
-            contentAdvisoryRating: result.contentAdvisoryRating,
+            contentAdvisoryRating: normalizedOptional(contentRating),
             artworkURL: result.artworkURL,
             sortTitle: normalizedOptional(sortTitle),
             sortSeriesName: normalizedOptional(sortSeriesName),
@@ -81,7 +107,13 @@ struct MetadataDraft: Equatable, Sendable {
             matchSummary: result.matchSummary,
             matchScore: result.matchScore,
             seasonNumber: normalizedInteger(seasonNumber),
-            episodeNumber: normalizedInteger(episodeNumber)
+            episodeNumber: normalizedInteger(episodeNumber),
+            communityRating: Double(communityRating.trimmingCharacters(in: .whitespacesAndNewlines)),
+            externalIDs: MediaExternalIDs(
+                imdb: normalizedOptional(imdbID),
+                tmdb: normalizedInteger(tmdbID),
+                tvmaze: normalizedInteger(tvmazeID)
+            )
         )
     }
 

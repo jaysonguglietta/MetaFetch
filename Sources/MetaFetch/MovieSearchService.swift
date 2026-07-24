@@ -17,6 +17,22 @@ enum MatchConfidence: String, Hashable, Sendable {
     }
 }
 
+struct MediaExternalIDs: Hashable, Codable, Sendable {
+    var imdb: String?
+    var tmdb: Int?
+    var tvmaze: Int?
+
+    init(imdb: String? = nil, tmdb: Int? = nil, tvmaze: Int? = nil) {
+        self.imdb = imdb?.trimmedNilIfBlank
+        self.tmdb = tmdb
+        self.tvmaze = tvmaze
+    }
+
+    var isEmpty: Bool {
+        imdb == nil && tmdb == nil && tvmaze == nil
+    }
+}
+
 struct MediaSearchResult: Hashable, Identifiable, Sendable {
     let trackId: Int
     let mediaKind: MediaSearchKind
@@ -38,6 +54,8 @@ struct MediaSearchResult: Hashable, Identifiable, Sendable {
     let matchScore: Int
     let seasonNumber: Int?
     let episodeNumber: Int?
+    let communityRating: Double?
+    let externalIDs: MediaExternalIDs
 
     init(
         trackId: Int,
@@ -59,7 +77,9 @@ struct MediaSearchResult: Hashable, Identifiable, Sendable {
         matchSummary: String,
         matchScore: Int,
         seasonNumber: Int?,
-        episodeNumber: Int?
+        episodeNumber: Int?,
+        communityRating: Double? = nil,
+        externalIDs: MediaExternalIDs = MediaExternalIDs()
     ) {
         self.trackId = trackId
         self.mediaKind = mediaKind
@@ -81,6 +101,8 @@ struct MediaSearchResult: Hashable, Identifiable, Sendable {
         self.matchScore = matchScore
         self.seasonNumber = seasonNumber
         self.episodeNumber = episodeNumber
+        self.communityRating = communityRating
+        self.externalIDs = externalIDs
     }
 
     var id: Int {
@@ -177,7 +199,9 @@ struct MediaSearchResult: Hashable, Identifiable, Sendable {
             matchSummary: matchSummary,
             matchScore: matchScore,
             seasonNumber: seasonNumber,
-            episodeNumber: episodeNumber
+            episodeNumber: episodeNumber,
+            communityRating: communityRating,
+            externalIDs: externalIDs
         )
     }
 }
@@ -188,6 +212,10 @@ protocol MediaSearchServing: Sendable {
 
 protocol MetadataDiagnosticSearchServing: MediaSearchServing {
     func searchWithDiagnostics(matching query: String, mode: MediaLibraryMode) async throws -> MetadataSearchResponse
+}
+
+protocol TVSeasonCatalogServing: MediaSearchServing {
+    func episodes(forSeriesID seriesID: Int, seasonNumber: Int) async throws -> [MediaSearchResult]
 }
 
 struct MetadataSearchResponse: Sendable {
@@ -333,6 +361,12 @@ extension MetadataCatalogSearchService: MetadataDiagnosticSearchServing {
     }
 }
 
+extension MetadataCatalogSearchService: TVSeasonCatalogServing {
+    func episodes(forSeriesID seriesID: Int, seasonNumber: Int) async throws -> [MediaSearchResult] {
+        try await tvService.episodes(forSeriesID: seriesID, seasonNumber: seasonNumber)
+    }
+}
+
 private struct AlternateMovieProviderSearchService {
     private let tmdbService = TMDbMovieSearchService()
     private let omdbService = OMDbMovieSearchService()
@@ -368,6 +402,7 @@ private struct TMDbMovieSearchService {
         let releaseDate: String?
         let overview: String?
         let posterPath: String?
+        let voteAverage: Double?
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -375,6 +410,7 @@ private struct TMDbMovieSearchService {
             case releaseDate = "release_date"
             case overview
             case posterPath = "poster_path"
+            case voteAverage = "vote_average"
         }
     }
 
@@ -465,7 +501,9 @@ private struct TMDbMovieSearchService {
             matchSummary: "TMDb movie result",
             matchScore: 0,
             seasonNumber: nil,
-            episodeNumber: nil
+            episodeNumber: nil,
+            communityRating: movie.voteAverage,
+            externalIDs: MediaExternalIDs(tmdb: movie.id)
         )
 
         let evaluation = evaluateProviderMatch(
@@ -519,6 +557,7 @@ private struct OMDbMovieSearchService {
         let Plot: String?
         let Poster: String?
         let imdbID: String?
+        let imdbRating: String?
         let Response: String
     }
 
@@ -650,7 +689,9 @@ private struct OMDbMovieSearchService {
             matchSummary: "OMDb movie result",
             matchScore: 0,
             seasonNumber: nil,
-            episodeNumber: nil
+            episodeNumber: nil,
+            communityRating: detail.imdbRating.flatMap(Double.init),
+            externalIDs: MediaExternalIDs(imdb: detail.imdbID)
         )
 
         let evaluation = evaluateProviderMatch(
@@ -1306,6 +1347,38 @@ private struct TVMazeSearchService {
             .sorted { lhs, rhs in lhs.matchScore > rhs.matchScore }
     }
 
+    func episodes(forSeriesID seriesID: Int, seasonNumber: Int) async throws -> [MediaSearchResult] {
+        guard seriesID > 0, seasonNumber > 0 else {
+            return []
+        }
+
+        guard let showURL = URL(string: "https://api.tvmaze.com/shows/\(seriesID)") else {
+            throw SearchError.invalidURL
+        }
+
+        let show = try await performRequest(showURL, decoding: TVMazeShow.self)
+        let episodes = try await fetchEpisodes(forShowID: seriesID)
+        return episodes
+            .filter { $0.season == seasonNumber }
+            .map { episode in
+                let query = ParsedMediaQuery(
+                    mode: .tvShow,
+                    title: show.name,
+                    year: nil,
+                    seasonNumber: episode.season,
+                    episodeNumber: episode.number,
+                    episodeTitle: episode.name
+                )
+                return buildEpisodeResult(
+                    episode: episode,
+                    show: show,
+                    showScore: 1,
+                    parsedQuery: query
+                )
+            }
+            .sorted { ($0.episodeNumber ?? Int.max) < ($1.episodeNumber ?? Int.max) }
+    }
+
     private func fetchShowMatches(for title: String) async throws -> [ShowSearchHit] {
         var components = URLComponents(string: "https://api.tvmaze.com/search/shows")
         components?.queryItems = [
@@ -1505,7 +1578,8 @@ private struct TVMazeSearchService {
             matchSummary: summary,
             matchScore: score,
             seasonNumber: episode.season,
-            episodeNumber: episode.number
+            episodeNumber: episode.number,
+            externalIDs: MediaExternalIDs(tvmaze: episode.id)
         )
     }
 
@@ -1574,7 +1648,8 @@ private struct TVMazeSearchService {
             matchSummary: summary,
             matchScore: score,
             seasonNumber: nil,
-            episodeNumber: nil
+            episodeNumber: nil,
+            externalIDs: MediaExternalIDs(tvmaze: show.id)
         )
     }
 
@@ -1626,7 +1701,9 @@ private extension MediaSearchResult {
             matchSummary: evaluation.summary,
             matchScore: evaluation.score,
             seasonNumber: seasonNumber,
-            episodeNumber: episodeNumber
+            episodeNumber: episodeNumber,
+            communityRating: communityRating,
+            externalIDs: externalIDs
         )
     }
 }

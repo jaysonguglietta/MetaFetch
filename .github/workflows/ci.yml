@@ -36,8 +36,8 @@ jobs:
       - name: Build app bundle
         run: ./Scripts/build_app.sh
 
-      - name: Verify app signature
-        run: codesign --verify --deep --strict dist/MetaFetch.app
+      - name: Verify runtime app bundle
+        run: ./Scripts/verify_app_bundle.sh dist/MetaFetch.app
 
       - name: Check release DMG script syntax
         run: zsh -n Scripts/build_release_dmg.sh

@@ -134,11 +134,13 @@ struct MP4MetadataWriter: MetadataWriting {
             throw WriterError.unsupportedFileType
         }
 
-        let temporaryURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("mp4")
+        let stagingLocation = try TransactionalFileReplacement.makeStagingLocation(
+            for: fileURL,
+            pathExtension: "mp4"
+        )
+        let temporaryURL = stagingLocation.fileURL
         defer {
-            try? FileManager.default.removeItem(at: temporaryURL)
+            stagingLocation.remove()
         }
 
         exportSession.shouldOptimizeForNetworkUse = false
@@ -252,7 +254,10 @@ struct MP4MetadataWriter: MetadataWriting {
                 switch replacementError {
                 case .verificationFailed:
                     break
-                case .rollbackUnavailable, .rollbackFailed:
+                case .rollbackUnavailable,
+                     .rollbackFailed,
+                     .stagingUnavailable,
+                     .coordinatedReplacementFailed:
                     throw error
                 }
             }
@@ -344,6 +349,19 @@ struct MP4MetadataWriter: MetadataWriting {
 
         if let rating = result.contentAdvisoryRating.nilIfBlank {
             commentLines.append("Rating: \(rating)")
+        }
+
+        if let communityRating = result.communityRating {
+            commentLines.append("Community Rating: \(String(format: "%.1f", communityRating))")
+        }
+        if let imdb = result.externalIDs.imdb.nilIfBlank {
+            commentLines.append("IMDb: \(imdb)")
+        }
+        if let tmdb = result.externalIDs.tmdb {
+            commentLines.append("TMDb: \(tmdb)")
+        }
+        if let tvmaze = result.externalIDs.tvmaze {
+            commentLines.append("TVMaze: \(tvmaze)")
         }
 
         if let releaseDate = parsedDate(from: result.releaseDate),

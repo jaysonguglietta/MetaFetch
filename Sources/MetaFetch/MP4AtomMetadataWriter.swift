@@ -1,5 +1,13 @@
 import Foundation
 
+struct MP4RawMetadataItem: Identifiable, Hashable, Sendable {
+    let key: String
+    let kind: String
+    let value: String
+
+    var id: String { "\(key)-\(kind)-\(value)" }
+}
+
 struct MP4AtomMetadataWriter: Sendable {
     enum AtomWriterError: LocalizedError {
         case missingMovieAtom
@@ -224,6 +232,32 @@ struct MP4AtomMetadataWriter: Sendable {
         )
     }
 
+    func rawMetadataItems(at fileURL: URL) throws -> [MP4RawMetadataItem] {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+
+        let fileSize = try handle.seekToEnd()
+        let topLevelBoxes = try readTopLevelBoxes(from: handle, fileSize: fileSize)
+        guard let movieBox = topLevelBoxes.first(where: { $0.type == .moov }) else {
+            throw AtomWriterError.missingMovieAtom
+        }
+
+        let metadata = try readMetadata(from: readMovieAtomData(from: handle, movieBox: movieBox))
+        var items = metadata.textValuesByType.flatMap { type, values in
+            values.map { MP4RawMetadataItem(key: type.displayName, kind: "Text", value: $0) }
+        }
+        items += metadata.integerValuesByType.flatMap { type, values in
+            values.map { MP4RawMetadataItem(key: type.displayName, kind: "Integer", value: String($0)) }
+        }
+        if metadata.hasArtwork {
+            items.append(MP4RawMetadataItem(key: MP4AtomType.coverArt.displayName, kind: "Artwork", value: "Embedded image data"))
+        }
+        return items.sorted {
+            if $0.key == $1.key { return $0.value < $1.value }
+            return $0.key < $1.key
+        }
+    }
+
     func metadataWasPersisted(
         at fileURL: URL,
         result: MediaSearchResult,
@@ -382,8 +416,11 @@ struct MP4AtomMetadataWriter: Sendable {
         expectsArtwork: Bool,
         progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)?
     ) async throws {
-        let temporaryURL = fileURL.deletingLastPathComponent()
-            .appendingPathComponent(".\(fileURL.lastPathComponent).metafetch-\(UUID().uuidString).tmp")
+        let stagingLocation = try TransactionalFileReplacement.makeStagingLocation(
+            for: fileURL,
+            pathExtension: "mp4"
+        )
+        let temporaryURL = stagingLocation.fileURL
 
         _ = FileManager.default.createFile(atPath: temporaryURL.path, contents: nil)
 
@@ -396,7 +433,7 @@ struct MP4AtomMetadataWriter: Sendable {
             try? output.close()
 
             if !didFinish {
-                try? FileManager.default.removeItem(at: temporaryURL)
+                stagingLocation.remove()
             }
         }
 
@@ -448,6 +485,7 @@ struct MP4AtomMetadataWriter: Sendable {
             )
         }
         didFinish = true
+        stagingLocation.remove()
     }
 
     private func readRegion(at offset: UInt64, length: UInt64, from fileURL: URL) throws -> Data {
@@ -779,6 +817,20 @@ struct MP4AtomMetadataWriter: Sendable {
 
         if let rating = result.contentAdvisoryRating?.trimmedNilIfBlank {
             lines.append("Rating: \(rating)")
+        }
+
+        if let communityRating = result.communityRating {
+            lines.append("Community Rating: \(String(format: "%.1f", communityRating))")
+        }
+
+        if let imdb = result.externalIDs.imdb?.trimmedNilIfBlank {
+            lines.append("IMDb: \(imdb)")
+        }
+        if let tmdb = result.externalIDs.tmdb {
+            lines.append("TMDb: \(tmdb)")
+        }
+        if let tvmaze = result.externalIDs.tvmaze {
+            lines.append("TVMaze: \(tvmaze)")
         }
 
         lines.append("Tagged by MetaFetch from \(result.sourceName)")
@@ -1372,6 +1424,36 @@ private struct MP4AtomType: Hashable, Sendable {
 
     var isContainer: Bool {
         Self.containerTypes.contains(self)
+    }
+
+    var displayName: String {
+        let knownName: String? = switch self {
+        case .name: "©nam (Title)"
+        case .album: "©alb (Album)"
+        case .albumArtist: "aART (Album Artist)"
+        case .artist: "©ART (Artist)"
+        case .comment: "©cmt (Comment)"
+        case .coverArt: "covr (Artwork)"
+        case .description: "desc (Description)"
+        case .episodeId: "tven (Episode ID)"
+        case .genre: "©gen (Genre)"
+        case .longDescription: "ldes (Long Description)"
+        case .mediaKind: "stik (Media Kind)"
+        case .releaseDate: "©day (Release Date)"
+        case .sortAlbum: "soal (Sort Album)"
+        case .sortName: "sonm (Sort Name)"
+        case .sortShow: "sosn (Sort Show)"
+        case .trackNumber: "trkn (Track Number)"
+        case .tvEpisode: "tves (TV Episode)"
+        case .tvSeason: "tvsn (TV Season)"
+        case .tvShow: "tvsh (TV Show)"
+        default: nil
+        }
+        if let knownName { return knownName }
+        return bytes.map { byte -> String in
+            if (32...126).contains(byte) { return String(UnicodeScalar(byte)) }
+            return String(format: "\\x%02X", byte)
+        }.joined()
     }
 
     private static let containerTypes: Set<MP4AtomType> = [

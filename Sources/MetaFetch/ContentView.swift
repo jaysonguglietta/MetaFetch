@@ -221,6 +221,9 @@ struct ContentView: View {
     }
 
     private func presentUpdateCheck() {
+        if SignedUpdateCoordinator.shared.checkForUpdates() {
+            return
+        }
         isUpdatePresented = true
 
         Task {
@@ -1224,6 +1227,75 @@ private struct BatchSeasonsPane: View {
                 .foregroundStyle(RetroTheme.muted)
                 .fixedSize(horizontal: false, vertical: true)
 
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    TextField("Season", text: $model.reconciliationSeasonText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 90)
+                        .accessibilityLabel("Season number to reconcile")
+
+                    Button(model.isReconcilingSeason ? "Reconciling..." : "Reconcile Full Season") {
+                        Task { await model.reconcileSelectedSeason() }
+                    }
+                    .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.cyan))
+                    .disabled(model.isReconcilingSeason || model.selectedBatchResult?.mediaKind != .tvSeries)
+
+                    Button("Apply Unambiguous Matches") {
+                        model.applyReconciledMatches()
+                    }
+                    .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.lime))
+                    .disabled(model.seasonReconciliationReport?.matchedCount == 0)
+
+                    Spacer()
+                }
+
+                Text("Compares loaded episode numbers with TVMaze’s complete season list. Duplicates, missing files, and provider mismatches stay review-only.")
+                    .font(RetroTheme.bodyFont(12))
+                    .foregroundStyle(RetroTheme.muted)
+
+                if let error = model.reconciliationError {
+                    Text(error)
+                        .font(RetroTheme.bodyFont(12))
+                        .foregroundStyle(RetroTheme.gold)
+                }
+
+                if let report = model.seasonReconciliationReport {
+                    HStack(spacing: 8) {
+                        InfoBadge(text: "\(report.matchedCount) Matched", accent: RetroTheme.lime, foreground: RetroTheme.ink)
+                        InfoBadge(text: "\(report.attentionCount) Review", accent: RetroTheme.gold, foreground: RetroTheme.ink)
+                    }
+
+                    ForEach(report.rows) { row in
+                        HStack(alignment: .top, spacing: 10) {
+                            Text(row.episodeCode)
+                                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                .foregroundStyle(row.status.needsAttention ? RetroTheme.gold : RetroTheme.cyan)
+                                .frame(width: 46, alignment: .leading)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(row.episodeTitle)
+                                    .font(RetroTheme.labelFont(13))
+                                    .foregroundStyle(RetroTheme.paper)
+                                Text(row.localFilenames.isEmpty ? "No local file" : row.localFilenames.joined(separator: ", "))
+                                    .font(RetroTheme.bodyFont(11))
+                                    .foregroundStyle(RetroTheme.muted)
+                                    .lineLimit(2)
+                            }
+                            Spacer()
+                            InfoBadge(
+                                text: row.status.rawValue,
+                                accent: row.status.needsAttention ? RetroTheme.gold : RetroTheme.lime,
+                                foreground: RetroTheme.ink
+                            )
+                        }
+                        .padding(9)
+                        .background(Color.black.opacity(0.16))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                }
+            }
+            .padding(14)
+            .retroPanel(accent: RetroTheme.cyan)
+
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     ForEach(seasonGroups, id: \.self) { group in
@@ -1933,6 +2005,11 @@ private struct FileWorkspaceView: View {
                     await model.inspectHeadroom(for: entry)
                 }
             },
+            repairHeadroomAction: {
+                Task {
+                    await model.repairHeadroom(for: entry)
+                }
+            },
             saveAction: {
                 Task {
                     await model.save(file: entry)
@@ -2183,6 +2260,8 @@ private struct SearchResultCard: View {
 private struct MetadataEditorCard: View {
     @ObservedObject var entry: MovieFileEntry
     @State private var isArtworkImporterPresented = false
+    @State private var isMetadataImporterPresented = false
+    @State private var interchangeStatus: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -2225,10 +2304,21 @@ private struct MetadataEditorCard: View {
 
                 editorField("Release Date", text: $entry.metadataDraft.year)
 
+                HStack(spacing: 10) {
+                    editorField("Content Rating", text: $entry.metadataDraft.contentRating)
+                    editorField("Community Rating (0-10)", text: $entry.metadataDraft.communityRating)
+                }
+
                 editorField("Sort Title", text: $entry.metadataDraft.sortTitle)
 
                 if entry.mediaMode == .tvShow {
                     editorField("Sort Series", text: $entry.metadataDraft.sortSeriesName)
+                }
+
+                HStack(spacing: 10) {
+                    editorField("IMDb ID", text: $entry.metadataDraft.imdbID)
+                    editorField("TMDb ID", text: $entry.metadataDraft.tmdbID)
+                    editorField("TVMaze ID", text: $entry.metadataDraft.tvmazeID)
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
@@ -2258,6 +2348,34 @@ private struct MetadataEditorCard: View {
                 Text(validationError)
                     .font(RetroTheme.bodyFont(12))
                     .foregroundStyle(RetroTheme.gold)
+            }
+
+            Divider()
+                .overlay(RetroTheme.paper.opacity(0.14))
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Metadata Interchange".uppercased())
+                    .font(RetroTheme.labelFont(10))
+                    .tracking(1.8)
+                    .foregroundStyle(RetroTheme.paper.opacity(0.68))
+
+                HStack(spacing: 10) {
+                    Button("Import JSON / NFO") { isMetadataImporterPresented = true }
+                        .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.cyan))
+                        .disabled(entry.isSaving)
+                    Button("Export JSON") { exportMetadata(format: "json") }
+                        .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.paper.opacity(0.18)))
+                        .disabled(entry.selectedResult == nil)
+                    Button("Export NFO") { exportMetadata(format: "nfo") }
+                        .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.paper.opacity(0.18)))
+                        .disabled(entry.selectedResult == nil)
+                }
+
+                if let interchangeStatus {
+                    Text(interchangeStatus)
+                        .font(RetroTheme.bodyFont(12))
+                        .foregroundStyle(RetroTheme.muted)
+                }
             }
 
             Divider()
@@ -2305,6 +2423,44 @@ private struct MetadataEditorCard: View {
             case .failure(let error):
                 entry.errorMessage = error.localizedDescription
             }
+        }
+        .fileImporter(
+            isPresented: $isMetadataImporterPresented,
+            allowedContentTypes: [.json, .xml, .data],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else { return }
+                SecurityScopedAccessManager.shared.retainAccess(to: url)
+                do {
+                    let document = try MetadataInterchange.load(from: url)
+                    document.applying(to: &entry.metadataDraft)
+                    interchangeStatus = "Imported \(url.lastPathComponent). Review the fields before saving."
+                } catch {
+                    interchangeStatus = error.localizedDescription
+                }
+            case .failure(let error):
+                interchangeStatus = error.localizedDescription
+            }
+        }
+    }
+
+    private func exportMetadata(format: String) {
+        guard let result = entry.selectedResult else { return }
+        let document = MetadataInterchangeDocument(draft: entry.metadataDraft, result: result)
+        do {
+            let data = format == "nfo"
+                ? MetadataInterchange.nfoData(for: document)
+                : try MetadataInterchange.jsonData(for: document)
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = "\(entry.fileURL.deletingPathExtension().lastPathComponent).\(format)"
+            panel.canCreateDirectories = true
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            try data.write(to: url, options: [.atomic])
+            interchangeStatus = "Exported \(url.lastPathComponent)."
+        } catch {
+            interchangeStatus = error.localizedDescription
         }
     }
 
@@ -2464,10 +2620,73 @@ private struct MetadataDiffCard: View {
     }
 }
 
+private struct RawMetadataInspectorCard: View {
+    @ObservedObject var entry: MovieFileEntry
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                RetroPill(text: "Raw MP4 Tags", accent: RetroTheme.paper.opacity(0.28))
+                Spacer()
+                Button(isExpanded ? "Hide" : "Inspect") {
+                    isExpanded.toggle()
+                    if isExpanded { load() }
+                }
+                .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.paper.opacity(0.18)))
+                .disabled(entry.isSaving)
+            }
+
+            if isExpanded {
+                if let error = entry.rawMetadataError {
+                    Text(error)
+                        .font(RetroTheme.bodyFont(12))
+                        .foregroundStyle(RetroTheme.gold)
+                } else if entry.rawMetadataItems.isEmpty {
+                    Text("No iTunes-style MP4 tags are present in this file yet.")
+                        .font(RetroTheme.bodyFont(12))
+                        .foregroundStyle(RetroTheme.muted)
+                } else {
+                    ForEach(entry.rawMetadataItems) { item in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("\(item.key) • \(item.kind)")
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(RetroTheme.cyan)
+                            Text(item.value)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(RetroTheme.paper)
+                                .textSelection(.enabled)
+                                .lineLimit(5)
+                        }
+                        .padding(9)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.black.opacity(0.18))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .retroPanel(accent: RetroTheme.paper.opacity(0.22))
+    }
+
+    private func load() {
+        do {
+            entry.rawMetadataItems = try MP4AtomMetadataWriter().rawMetadataItems(at: entry.fileURL)
+            entry.rawMetadataError = nil
+        } catch {
+            entry.rawMetadataItems = []
+            entry.rawMetadataError = error.localizedDescription
+        }
+    }
+}
+
 private struct HeadroomInspectionCard: View {
     @ObservedObject var entry: MovieFileEntry
     let safetyBackupsEnabled: Bool
     let inspectAction: () -> Void
+    let repairAction: () -> Void
+    @State private var isRepairConfirmationPresented = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
@@ -2515,6 +2734,15 @@ private struct HeadroomInspectionCard: View {
                         value: "\(Self.byteCount(reservedBytes)) / \(Self.byteCount(requiredBytes))"
                     )
                 }
+
+                if case .needsRewrite = inspection.status {
+                    Button(entry.isRepairingHeadroom ? "Reserving Headroom..." : "Reserve 16 MB Headroom") {
+                        isRepairConfirmationPresented = true
+                    }
+                    .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.cyan))
+                    .disabled(entry.isSaving || entry.isRepairingHeadroom)
+                    .help("Uses trusted local FFmpeg to copy streams into a verified MP4 with metadata headroom.")
+                }
             } else {
                 Text(entry.headroomSummary)
                     .font(RetroTheme.bodyFont(12))
@@ -2524,6 +2752,16 @@ private struct HeadroomInspectionCard: View {
         }
         .padding(14)
         .retroPanel(accent: accent)
+        .confirmationDialog(
+            "Rebuild this MP4 container?",
+            isPresented: $isRepairConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Reserve Headroom") { repairAction() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("FFmpeg will copy the existing streams without re-encoding, verify the result, then transactionally replace the original.")
+        }
     }
 
     private var accent: Color {
@@ -2550,6 +2788,7 @@ private struct SelectionPreviewCard: View {
     @ObservedObject var entry: MovieFileEntry
     let safetyBackupsEnabled: Bool
     let inspectHeadroomAction: () -> Void
+    let repairHeadroomAction: () -> Void
     let saveAction: () -> Void
 
     var body: some View {
@@ -2586,6 +2825,9 @@ private struct SelectionPreviewCard: View {
                     )
                     MatchConfidenceBadge(confidence: match.matchConfidence)
                     InfoBadge(text: match.sourceName, accent: RetroTheme.paper.opacity(0.18), foreground: RetroTheme.paper)
+                    if entry.isExtra {
+                        InfoBadge(text: entry.assetRole.label, accent: RetroTheme.gold, foreground: RetroTheme.ink)
+                    }
                 }
 
                 Text(match.matchSummary)
@@ -2634,6 +2876,8 @@ private struct SelectionPreviewCard: View {
 
                 MetadataDiffCard(entry: entry)
 
+                RawMetadataInspectorCard(entry: entry)
+
                 VStack(alignment: .leading, spacing: 2) {
                     Text(entry.hasSelectedArtwork ? "Poster Artwork Included" : "No Poster Artwork Available")
                         .font(RetroTheme.labelFont(13))
@@ -2653,7 +2897,8 @@ private struct SelectionPreviewCard: View {
                 HeadroomInspectionCard(
                     entry: entry,
                     safetyBackupsEnabled: safetyBackupsEnabled,
-                    inspectAction: inspectHeadroomAction
+                    inspectAction: inspectHeadroomAction,
+                    repairAction: repairHeadroomAction
                 )
 
                 if entry.isSeriesOnlySelectionForEpisodeQuery {
@@ -2824,6 +3069,7 @@ private struct HelpView: View {
                             "For a few episodes from the same show, drop them together and use the batch workspace to search the show once.",
                             "For larger seasons, use Add Season Folder to recursively queue writable MP4 files.",
                             "Clicking a show card applies that show to every file while preserving each detected episode code.",
+                            "Use Reconcile Season to compare the whole provider season, flag missing or duplicate episode numbers, and apply only unambiguous matches.",
                             "A Series Only badge means MetaFetch found the show, but not a specific episode yet.",
                             "Add or edit an episode code like S02E04 in the search field for exact episode tags.",
                         ]
@@ -2848,11 +3094,12 @@ private struct HelpView: View {
                             "Use Manual Edit to adjust title, sort title, series, sort series, genre, release date, season, episode, creator, description, and custom poster before saving.",
                             "Clearing an optional Manual Edit field removes that managed tag; missing-description placeholder text is never written into the MP4.",
                             "Use Check Poster Headroom before artwork saves to estimate whether a fast header update is likely.",
+                            "Reserve 16 MB Headroom performs a validated FFmpeg stream-copy remux; the automatic option is available in Advanced Preferences.",
                             "Batch saves keep poster artwork on when the selected source provides it.",
                             "Saving with poster artwork may rebuild the MP4 container, but video/audio are not re-encoded.",
                             "A save is reported successful only after every requested field and poster are read back from disk; failed writes restore the original data.",
                             "The save report shows the actual write path, duration, poster state, failures, and backup files, then exports safe CSV or JSON or retries failed rows.",
-                            "Use Advanced Preferences for poster defaults, safety backups, provider priority, watch folders, and rename-after-save templates.",
+                            "Use Advanced Preferences for profiles, confidence rules, extras, poster/headroom defaults, safety backups, provider priority, recovery, watch folders, and custom rename presets.",
                         ]
                     )
 
@@ -2874,9 +3121,11 @@ private struct HelpView: View {
                         rows: [
                             "Use queue filters to focus exact matches, needs-review rows, series-only rows, saved files, failures, or files with posters.",
                             "Use Tag Preview Diff to compare current MP4 tags with the final edited tags when existing tags are readable.",
+                            "Import or export editable JSON/NFO sidecars, and use Raw MP4 Tags to inspect the underlying atom values without changing the file.",
                             "Provider diagnostics show searched, skipped, failed, and no-key provider states after movie searches.",
                             "Enable rename-after-save templates to produce clean filenames after verified saves.",
                             "Use Watch Folder to poll a folder and queue newly added writable MP4 files automatically.",
+                            "Recovery Center can restore a specific safety copy or Undo Last Save when a usable backup exists; diagnostics export is redacted and opt-in.",
                         ]
                     )
 
@@ -2884,7 +3133,7 @@ private struct HelpView: View {
                         title: "Updates",
                         accent: RetroTheme.cyan,
                         rows: [
-                            "Use Updates in the toolbar or Check for Updates from the app menu to look for newer GitHub releases.",
+                            "Configured production builds use a signed Sparkle appcast; other builds use the verified GitHub release workflow.",
                             "MetaFetch compares the installed app version with the latest GitHub release tag.",
                             "A release asset must include an exact-name .sha256 sidecar; MetaFetch verifies the checksum before keeping the download.",
                             "DMG downloads must also pass macOS code-signature validation and match the installed app's Developer ID team when available.",
@@ -2919,12 +3168,12 @@ private struct HelpView: View {
                     )
 
                     HelpSection(
-                        title: "Good Next Upgrades",
+                        title: "Data And Privacy",
                         accent: RetroTheme.gold,
                         rows: [
-                            "Add rename preset management for reusable library naming styles.",
-                            "Expand current-tag reading to additional niche third-party MP4/iTunes atoms.",
-                            "Add a signed Sparkle updater for fully automatic app replacement.",
+                            "MetaFetch runs in the macOS App Sandbox and writes only files or folders you select.",
+                            "Optional provider keys stay in Keychain; diagnostics omit keys and full paths.",
+                            "JSON/NFO imports are size-bounded, and NFO external entities are disabled.",
                         ]
                     )
                 }
@@ -3281,6 +3530,8 @@ private struct AdvancedPreferencesView: View {
     @ObservedObject var model: AppModel
     @State private var isWatchFolderImporterPresented = false
     @State private var historyExportError: String?
+    @State private var diagnosticsExportError: String?
+    @State private var customPresetName = ""
 
     var body: some View {
         ZStack {
@@ -3314,11 +3565,30 @@ private struct AdvancedPreferencesView: View {
                         .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
                     }
 
+                    preferenceSection(title: "Metadata Profiles", accent: RetroTheme.lime) {
+                        Picker("Profile", selection: $model.metadataProfile) {
+                            ForEach(MetadataProfile.allCases) { profile in
+                                Text(profile.label).tag(profile)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        Text(model.metadataProfile.detail)
+                            .font(RetroTheme.bodyFont(12))
+                            .foregroundStyle(RetroTheme.muted)
+
+                        Button("Apply Profile") {
+                            model.applyMetadataProfile(model.metadataProfile)
+                        }
+                        .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.lime))
+                    }
+
                     preferenceSection(title: "Save Defaults", accent: RetroTheme.lime) {
                         Toggle("Save poster artwork by default", isOn: $model.posterSavingDefault)
                         Toggle("Create safety backups before writing", isOn: $model.createSafetyBackups)
+                        Toggle("Automatically repair poster headroom", isOn: $model.automaticHeadroomRepair)
 
-                        Text("Poster saving can still be changed per file. Safety backups trade speed for a recoverable sidecar copy.")
+                        Text("Poster saving can still be changed per file. Automatic repair uses a trusted Homebrew FFmpeg binary only when an inspection predicts a rewrite, then performs the normal verified save.")
                             .font(RetroTheme.bodyFont(12))
                             .foregroundStyle(RetroTheme.muted)
                     }
@@ -3383,15 +3653,61 @@ private struct AdvancedPreferencesView: View {
                         Text("When enabled, a clear exact show result immediately drives all loaded episode searches while preserving each episode code.")
                             .font(RetroTheme.bodyFont(12))
                             .foregroundStyle(RetroTheme.muted)
+
+                        Picker("Auto-selection rule", selection: $model.confidenceRule) {
+                            ForEach(ConfidenceRule.allCases) { rule in
+                                Text(rule.label).tag(rule)
+                            }
+                        }
+                        .pickerStyle(.menu)
+
+                        Text(model.confidenceRule.detail)
+                            .font(RetroTheme.bodyFont(12))
+                            .foregroundStyle(RetroTheme.muted)
+
+                        Toggle("Allow automatic matches for trailers and extras", isOn: $model.allowAutomaticMatchingForExtras)
+
+                        Text("Extras are detected from filenames and stay manual-review by default so a trailer cannot silently receive main-feature tags.")
+                            .font(RetroTheme.bodyFont(12))
+                            .foregroundStyle(RetroTheme.muted)
                     }
 
                     preferenceSection(title: "Rename After Tagging", accent: RetroTheme.gold) {
                         Toggle("Rename files after successful save", isOn: $model.renameAfterSave)
 
+                        Picker("Rename preset", selection: $model.selectedRenamePresetID) {
+                            ForEach(model.renamePresets) { preset in
+                                Text(preset.name).tag(preset.id)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .onChange(of: model.selectedRenamePresetID) { _, value in
+                            model.applyRenamePreset(id: value)
+                        }
+
                         TextField("Movie template", text: $model.movieRenameTemplate)
                             .textFieldStyle(.roundedBorder)
                         TextField("TV template", text: $model.tvRenameTemplate)
                             .textFieldStyle(.roundedBorder)
+
+                        HStack(spacing: 10) {
+                            TextField("New preset name", text: $customPresetName)
+                                .textFieldStyle(.roundedBorder)
+
+                            Button("Save Custom Preset") {
+                                model.saveCurrentRenamePreset(named: customPresetName)
+                                if model.selectedRenamePresetID.hasPrefix("custom-") {
+                                    customPresetName = ""
+                                }
+                            }
+                            .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.cyan))
+
+                            Button("Delete Preset") {
+                                model.deleteSelectedRenamePreset()
+                            }
+                            .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.magenta))
+                            .disabled(!model.selectedRenamePresetID.hasPrefix("custom-"))
+                        }
 
                         Text("Tokens: {title}, {sort_title}, {series}, {sort_series}, {year}, {season}, {episode}, {season_episode}. Existing files get a safe numeric suffix.")
                             .font(RetroTheme.bodyFont(12))
@@ -3465,6 +3781,96 @@ private struct AdvancedPreferencesView: View {
                                 .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
                             }
                         }
+
+                        if !model.folderImportGroups.isEmpty {
+                            Divider().overlay(RetroTheme.paper.opacity(0.14))
+                            Text("Detected Import Groups".uppercased())
+                                .font(RetroTheme.labelFont(10))
+                                .tracking(1.8)
+                                .foregroundStyle(RetroTheme.cyan)
+                            ForEach(model.folderImportGroups) { group in
+                                Text("\(group.label) • \(group.fileIDs.count) file\(group.fileIDs.count == 1 ? "" : "s")")
+                                    .font(RetroTheme.bodyFont(12))
+                                    .foregroundStyle(RetroTheme.paper)
+                            }
+                        }
+                    }
+
+                    preferenceSection(title: "Recovery Center", accent: RetroTheme.gold) {
+                        Text("Safety copies and interrupted-write rollback files near the loaded MP4s appear here. Restore uses a verified transactional replacement.")
+                            .font(RetroTheme.bodyFont(12))
+                            .foregroundStyle(RetroTheme.muted)
+
+                        Button("Scan Loaded Folders") { model.refreshRecoveryRecords() }
+                            .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.cyan))
+
+                        Button("Undo Last Save") {
+                            Task { await model.undoLastSave() }
+                        }
+                        .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+                        .disabled(model.latestUndoRecord == nil)
+
+                        if model.recoveryRecords.isEmpty {
+                            Text("No recoverable copies found near the loaded files.")
+                                .font(RetroTheme.bodyFont(12))
+                                .foregroundStyle(RetroTheme.muted)
+                        } else {
+                            ForEach(model.recoveryRecords) { record in
+                                HStack(alignment: .top, spacing: 10) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(record.originalURL.lastPathComponent)
+                                            .font(RetroTheme.labelFont(12))
+                                            .foregroundStyle(RetroTheme.paper)
+                                        Text("\(record.kind.rawValue) • \(ByteCountFormatter.string(fromByteCount: record.byteCount, countStyle: .file))")
+                                            .font(RetroTheme.bodyFont(11))
+                                            .foregroundStyle(RetroTheme.muted)
+                                    }
+                                    Spacer()
+                                    Button("Restore") {
+                                        Task { await model.restoreRecoveryRecord(record) }
+                                    }
+                                    .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+                                }
+                                .padding(10)
+                                .background(Color.black.opacity(0.16))
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            }
+                        }
+
+                        if let status = model.recoveryStatusMessage {
+                            Text(status)
+                                .font(RetroTheme.bodyFont(12))
+                                .foregroundStyle(RetroTheme.paper)
+                        }
+                    }
+
+                    preferenceSection(title: "Diagnostics & Privacy", accent: RetroTheme.magenta) {
+                        Text("Export an opt-in support bundle with app state, provider counts, and recent save outcomes. API keys, filenames, and paths are excluded; rows use per-export salted identifiers.")
+                            .font(RetroTheme.bodyFont(12))
+                            .foregroundStyle(RetroTheme.muted)
+
+                        Button("Export Redacted Diagnostics") { exportDiagnostics() }
+                            .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.magenta))
+
+                        if let diagnosticsExportError {
+                            Text(diagnosticsExportError)
+                                .font(RetroTheme.bodyFont(12))
+                                .foregroundStyle(RetroTheme.gold)
+                        }
+                    }
+
+                    preferenceSection(title: "Signed Updates", accent: RetroTheme.cyan) {
+                        Text(SignedUpdateCoordinator.shared.configurationSummary)
+                            .font(RetroTheme.bodyFont(12))
+                            .foregroundStyle(RetroTheme.muted)
+
+                        Button("Check for Signed Update") {
+                            if !SignedUpdateCoordinator.shared.checkForUpdates() {
+                                model.noticeMessage = "Signed appcast updates are not configured in this build. Using the verified GitHub release checker instead."
+                                Task { await model.checkForUpdates() }
+                            }
+                        }
+                        .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.cyan))
                     }
                 }
                 .padding(28)
@@ -3486,6 +3892,7 @@ private struct AdvancedPreferencesView: View {
                 model.noticeMessage = error.localizedDescription
             }
         }
+        .onAppear { model.refreshRecoveryRecords() }
     }
 
     private func preferenceSection<Content: View>(
@@ -3522,6 +3929,19 @@ private struct AdvancedPreferencesView: View {
             historyExportError = nil
         } catch {
             historyExportError = error.localizedDescription
+        }
+    }
+
+    private func exportDiagnostics() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "MetaFetch Diagnostics.json"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try model.diagnosticsData().write(to: url, options: [.atomic])
+            diagnosticsExportError = nil
+        } catch {
+            diagnosticsExportError = error.localizedDescription
         }
     }
 }
