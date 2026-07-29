@@ -27,6 +27,7 @@ MetaFetch is a native macOS SwiftUI app for tagging `.mp4` files with movie or T
 - Export save reports as CSV or JSON.
 - Group folder and season imports by detected show and season in the TV batch workspace.
 - Reconcile a complete TV season against TVMaze, identify missing or duplicate episode numbers, and apply only unambiguous matches.
+- Export a read-only season reconciliation plan as formula-safe CSV or structured JSON before applying any episode matches.
 - Add optional TMDb and OMDb movie provider keys for broader movie search coverage.
 - Store optional provider keys locally in macOS Keychain.
 - Import and export editable metadata as bounded JSON or NFO, and inspect the raw MP4 atoms already present in a file.

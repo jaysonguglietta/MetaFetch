@@ -47,7 +47,8 @@ Production releases should be Developer ID signed, notarized, stapled, and gener
 
 ## Export And CI Safety
 
-- CSV reports and tagging-history exports prefix spreadsheet-formula cells so attacker-controlled filenames remain text.
+- CSV reports, tagging-history exports, and season dry runs prefix spreadsheet-formula cells so attacker-controlled filenames remain text.
+- Season dry-run exports are explicit user actions and include local filenames for review, but omit full filesystem paths.
 - Redacted diagnostics are generated only on explicit export, omit provider keys, filenames, and paths, and use per-export salted SHA-256 identifiers that cannot be correlated across bundles.
 - GitHub Actions uses read-only repository permissions, a SHA-pinned checkout action, concurrency cancellation, and a job timeout.
 

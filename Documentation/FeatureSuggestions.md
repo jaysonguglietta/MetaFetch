@@ -9,7 +9,6 @@ This roadmap starts after the advanced workflow, recovery, sandbox, and signed-u
 
 ## Usability Polish
 
-- Season dry run: Export the reconciliation plan before changing a large folder.
 - Recovery retention: Add a bounded cleanup policy for old user-visible safety backups.
 
 ## Metadata Power Features

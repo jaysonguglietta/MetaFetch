@@ -75,6 +75,7 @@ Batch controls:
 - `Series`: Pick the show match that should drive the whole batch.
 - `Seasons`: Review the loaded files by detected season and episode code, then jump into any row that needs attention.
 - `Reconcile Season`: Downloads the selected show's complete season catalog, marks matched, missing, duplicate, and unknown rows, and applies only one-to-one matches.
+- `Export CSV Plan` / `Export JSON Plan`: Saves a read-only dry run containing every episode status, planned action, provider source, and local filename before any matches are applied. Exports omit full filesystem paths, and CSV cells are protected against spreadsheet formulas.
 - `Data`: Inspect the selected episode metadata and choose a different returned match for that file when needed.
 - `Cover`: Choose episode-specific artwork or apply the selected series cover to every tagged episode.
 - Clicking a show card applies that show to every loaded episode file.
@@ -203,6 +204,7 @@ If the update checker says a release has no installable asset, open the release 
 - If TV mode only finds the series, add an episode code like `S01E03`.
 - If a season folder imports nothing, make sure it contains local writable `.mp4` files and is not a symlink or package.
 - If you are tagging several TV episodes, use the batch workspace to search the show once, apply it to all files, review badges, and save all selected matches with posters.
+- Before applying a large season reconciliation, export its CSV or JSON plan from the `Seasons` tab and review every row marked `No change`.
 - If the sidebar is hidden, use `Hide Sidebar` / `Show Sidebar` in the toolbar.
 - If saving is slow, use `Check Poster Headroom`; the MP4 may not have enough metadata space for a poster and may need a container rebuild.
 - If FFmpeg is installed through Homebrew, use `Reserve 16 MB Headroom` or enable automatic repair. A repair failure leaves the original in place.

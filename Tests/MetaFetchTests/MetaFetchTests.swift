@@ -1185,6 +1185,47 @@ final class MetaFetchTests: XCTestCase {
         XCTAssertEqual(report.rows.first(where: { $0.episodeNumber == 1 })?.status, .duplicateFile)
     }
 
+    func testSeasonDryRunExportsExplicitActionsWithoutFullPaths() throws {
+        let matched = SeasonReconciliationReport.Row(
+            id: "provider-1",
+            episodeNumber: 1,
+            episodeTitle: "Pilot",
+            providerResult: makeEpisodeResult(id: 1, title: "Pilot", episodeNumber: 1),
+            localFileIDs: [UUID()],
+            localFilenames: ["=SUM(1,2).S01E01.mp4"],
+            status: .matched
+        )
+        let missing = SeasonReconciliationReport.Row(
+            id: "provider-2",
+            episodeNumber: 2,
+            episodeTitle: "Second",
+            providerResult: makeEpisodeResult(id: 2, title: "Second", episodeNumber: 2),
+            localFileIDs: [],
+            localFilenames: [],
+            status: .missingFile
+        )
+        let report = SeasonReconciliationReport(
+            seriesTitle: "The Show",
+            seasonNumber: 1,
+            rows: [matched, missing]
+        )
+        let createdAt = Date(timeIntervalSince1970: 0)
+
+        let csv = String(decoding: report.csvData(createdAt: createdAt), as: UTF8.self)
+        XCTAssertTrue(csv.contains("Apply provider metadata to one local file"))
+        XCTAssertTrue(csv.contains("No change - add the missing local episode"))
+        XCTAssertTrue(csv.contains("'=SUM(1,2).S01E01.mp4"))
+        XCTAssertFalse(csv.contains("/tmp/"))
+
+        let data = try report.jsonData(createdAt: createdAt)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(payload["matchedCount"] as? Int, 1)
+        XCTAssertEqual(payload["attentionCount"] as? Int, 1)
+        let rows = try XCTUnwrap(payload["rows"] as? [[String: Any]])
+        XCTAssertEqual(rows.first?["willApply"] as? Bool, true)
+        XCTAssertEqual(rows.last?["willApply"] as? Bool, false)
+    }
+
     @MainActor
     func testDiagnosticsOmitFilenamesAndPaths() throws {
         let sensitivePath = "/Users/example/Private/Embarrassing.Movie.2026.mp4"

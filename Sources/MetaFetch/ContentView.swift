@@ -1163,6 +1163,8 @@ private struct TVBatchWorkspaceView: View {
 
 private struct BatchSeasonsPane: View {
     @ObservedObject var model: AppModel
+    @State private var dryRunExportMessage: String?
+    @State private var dryRunExportFailed = false
 
     private struct SeasonGroup: Hashable {
         let showTitle: String
@@ -1265,6 +1267,35 @@ private struct BatchSeasonsPane: View {
                         InfoBadge(text: "\(report.attentionCount) Review", accent: RetroTheme.gold, foreground: RetroTheme.ink)
                     }
 
+                    HStack(spacing: 10) {
+                        Button("Export CSV Plan") {
+                            exportDryRun(report, asJSON: false)
+                        }
+                        .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.cyan))
+                        .accessibilityHint("Exports the season comparison as a read-only CSV without changing any files.")
+
+                        Button("Export JSON Plan") {
+                            exportDryRun(report, asJSON: true)
+                        }
+                        .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+                        .accessibilityHint("Exports the season comparison as structured JSON without changing any files.")
+
+                        Text("Read-only dry run. Exporting never applies metadata.")
+                            .font(RetroTheme.bodyFont(11))
+                            .foregroundStyle(RetroTheme.muted)
+
+                        Spacer()
+                    }
+
+                    if let dryRunExportMessage {
+                        Label(
+                            dryRunExportMessage,
+                            systemImage: dryRunExportFailed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
+                        )
+                        .font(RetroTheme.bodyFont(12))
+                        .foregroundStyle(dryRunExportFailed ? RetroTheme.gold : RetroTheme.lime)
+                    }
+
                     ForEach(report.rows) { row in
                         HStack(alignment: .top, spacing: 10) {
                             Text(row.episodeCode)
@@ -1279,6 +1310,9 @@ private struct BatchSeasonsPane: View {
                                     .font(RetroTheme.bodyFont(11))
                                     .foregroundStyle(RetroTheme.muted)
                                     .lineLimit(2)
+                                Text(row.plannedAction)
+                                    .font(RetroTheme.bodyFont(11))
+                                    .foregroundStyle(row.canApply ? RetroTheme.lime : RetroTheme.gold)
                             }
                             Spacer()
                             InfoBadge(
@@ -1290,6 +1324,10 @@ private struct BatchSeasonsPane: View {
                         .padding(9)
                         .background(Color.black.opacity(0.16))
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel(
+                            "\(row.episodeCode), \(row.episodeTitle), \(row.status.rawValue), \(row.plannedAction)"
+                        )
                     }
                 }
             }
@@ -1319,6 +1357,33 @@ private struct BatchSeasonsPane: View {
                 }
             }
             .frame(minHeight: 420)
+        }
+    }
+
+    private func exportDryRun(_ report: SeasonReconciliationReport, asJSON: Bool) {
+        let fileExtension = asJSON ? "json" : "csv"
+        let safeSeriesTitle = report.seriesTitle
+            .replacingOccurrences(of: #"[/:]"#, with: " - ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = safeSeriesTitle.isEmpty ? "TV Season" : String(safeSeriesTitle.prefix(100))
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(title) Season \(report.seasonNumber) MetaFetch Dry Run.\(fileExtension)"
+        panel.allowedContentTypes = [asJSON ? .json : .commaSeparatedText]
+        panel.canCreateDirectories = true
+
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+
+        do {
+            let data = asJSON ? try report.jsonData() : report.csvData()
+            try data.write(to: url, options: [.atomic])
+            dryRunExportFailed = false
+            dryRunExportMessage = "Exported \(url.lastPathComponent)."
+        } catch {
+            dryRunExportFailed = true
+            dryRunExportMessage = "Export failed: \(error.localizedDescription)"
         }
     }
 }
@@ -3070,6 +3135,7 @@ private struct HelpView: View {
                             "For larger seasons, use Add Season Folder to recursively queue writable MP4 files.",
                             "Clicking a show card applies that show to every file while preserving each detected episode code.",
                             "Use Reconcile Season to compare the whole provider season, flag missing or duplicate episode numbers, and apply only unambiguous matches.",
+                            "Before applying matches, export the Seasons dry run as CSV or JSON to preserve every planned action without changing any MP4 files.",
                             "A Series Only badge means MetaFetch found the show, but not a specific episode yet.",
                             "Add or edit an episode code like S02E04 in the search field for exact episode tags.",
                         ]

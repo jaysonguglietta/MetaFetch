@@ -31,7 +31,7 @@ The first screen is the working app experience: choose `Movie` or `TV Show`, the
 5. If the provider does not have the requested episode code, use the trailing episode title as a fallback and explain when the provider lists it under a rebranded show or different season.
 6. For multiple files from one show, use the batch workspace to search the show once, apply it across detected episodes, review each episode, choose cover behavior, and save all ready files.
 7. Import season folders when there are many episodes to queue.
-8. Reconcile a chosen season against the provider catalog and apply only unambiguous one-to-one matches.
+8. Reconcile a chosen season against the provider catalog, export a read-only CSV/JSON plan when review or handoff is useful, and apply only unambiguous one-to-one matches.
 9. Block accidental series-only saves for episode files unless the user explicitly confirms that choice.
 
 ### Updates And Help
@@ -81,7 +81,7 @@ The first screen is the working app experience: choose `Movie` or `TV Show`, the
 - `FileQueueFilter`: Sidebar and TV batch filtering for exact matches, review states, series-only rows, saved rows, failures, and poster availability.
 - `MetadataProviderSource`: Provider preference for ranking movie results without hiding alternate sources.
 - `MetadataInterchange`: Size-bounded JSON/NFO import and export with external XML entity resolution disabled.
-- `SeasonReconciler`: Full-season matching that isolates missing, duplicate, and unknown episode rows.
+- `SeasonReconciler`: Full-season matching that isolates missing, duplicate, and unknown episode rows and exports explicit planned actions without full filesystem paths.
 - `RecoveryCenterService`: Verified transactional restore for discoverable safety and rollback copies.
 - `SecurityScopedAccessManager`: Retains user-selected file access and persists the watch folder as an app-scoped bookmark.
 - `SignedUpdateCoordinator`: Sparkle controller enabled only by an HTTPS feed and EdDSA public key in the signed app bundle.
@@ -122,4 +122,3 @@ The first screen is the working app experience: choose `Movie` or `TV Show`, the
 - Expand current-tag reading to additional niche third-party MP4/iTunes atoms.
 - Add chapter-marker editing and chapter artwork after a dedicated MP4 chapter safety review.
 - Add provider conflict comparison so a user can merge the best fields from multiple sources.
-- Add a dry-run season plan export for unattended library maintenance workflows.
