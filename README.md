@@ -17,16 +17,23 @@ MetaFetch is a native macOS SwiftUI app for tagging `.mp4` files with movie or T
 - Override provider artwork with a custom local poster image before saving.
 - Download movie and TV episode details/descriptions, then write title, synopsis, genre, artwork, and movie or episode-specific metadata back to Apple/iTunes-style MP4 atoms.
 - Check MP4 metadata headroom before poster saves to see whether a fast header update or container rewrite is likely.
+- Optionally repair insufficient poster headroom automatically with a trusted local FFmpeg installation before saving.
 - Use a native MP4 atom writer first, then fall back to AVFoundation only when the file layout requires it.
-- Verify saved metadata by reading the MP4 back after writing, then fall back if a fast save does not stick.
+- Verify every requested metadata field and requested poster by reading the MP4 back after writing, then roll back or fall back if a save does not stick.
+- Preserve unrelated third-party MP4 metadata while replacing only the Apple/iTunes-style fields managed by MetaFetch.
 - Prioritize speed by writing without creating sidecar safety backups by default.
-- Optionally enable safety backups when protection matters more than speed.
+- Stage rewrites and temporary rollback data on the movie’s own volume, coordinate atomic replacement, and optionally keep a separate user-visible safety backup when protection matters more than speed.
 - Review save reports showing which files verified, failed, included posters, used fast metadata-only saves, or required rewrites.
 - Export save reports as CSV or JSON.
 - Group folder and season imports by detected show and season in the TV batch workspace.
+- Reconcile a complete TV season against TVMaze, identify missing or duplicate episode numbers, and apply only unambiguous matches.
+- Export a read-only season reconciliation plan as formula-safe CSV or structured JSON before applying any episode matches.
 - Add optional TMDb and OMDb movie provider keys for broader movie search coverage.
 - Store optional provider keys locally in macOS Keychain.
-- Tune advanced preferences for poster defaults, provider priority, safety backups, TV batch auto-apply, watch folders, and rename-after-save templates.
+- Import and export editable metadata as bounded JSON or NFO, and inspect the raw MP4 atoms already present in a file.
+- Save content ratings, community ratings, and IMDb/TMDb/TVMaze identifiers when providers return them.
+- Tune metadata profiles, match-confidence rules, extras detection, poster defaults, provider priority, automatic headroom repair, safety backups, TV batch auto-apply, watch folders, and rename-after-save templates.
+- Create and delete custom rename presets for different media libraries.
 - Filter loaded files by exact matches, review state, series-only matches, saved files, failures, or poster availability.
 - Retry failed save report rows, including a faster retry-without-posters path.
 - Preview current MP4 tags, when readable, versus the final edited tags before writing.
@@ -34,6 +41,9 @@ MetaFetch is a native macOS SwiftUI app for tagging `.mp4` files with movie or T
 - Track local provider health and recent tagging history in Advanced Preferences, including CSV history export.
 - Optionally rename files after verified saves using movie or TV filename templates.
 - Check GitHub Releases for newer versions, download an installer asset, and reveal it in Finder for user-confirmed installation.
+- Use signed Sparkle appcast updates when a production build is configured with an HTTPS feed and EdDSA public key; retain the verified GitHub flow as a fallback.
+- Restore the newest usable safety backup with `Undo Last Save`, browse recovery records, or export a redacted diagnostics bundle for support.
+- Run inside the macOS App Sandbox with user-selected read/write access and a security-scoped watch-folder bookmark.
 - Re-check imported file identity before saving so MetaFetch refuses to tag a path that changed after import.
 
 ## Run
@@ -55,6 +65,8 @@ See [Product Brief](Documentation/ProductBrief.md) for the target users, product
 See [Product Blueprint](Documentation/ProductBlueprint.md) for the app goal, core workflows, key screens, data models, and edge cases.
 
 See [Feature Suggestions](Documentation/FeatureSuggestions.md) for the next product ideas worth considering.
+
+See [Security and Release Notes](Documentation/Security.md) for file-write guarantees, network boundaries, updater requirements, and residual risks.
 
 In the app, use the `Help` toolbar button or choose `Help > MetaFetch Help` with `Command-Shift-?`.
 
@@ -81,17 +93,34 @@ Build the local app bundle:
 ./Scripts/build_app.sh
 ```
 
+The build fails unless Sparkle is embedded, the executable contains the correct framework runtime path, the bundle identifier is correct, and the complete nested signature verifies. You can rerun those packaging checks directly with:
+
+```bash
+./Scripts/verify_app_bundle.sh dist/MetaFetch.app
+```
+
 Build with release version metadata:
 
 ```bash
-APP_VERSION=1.2 APP_BUILD=3 ./Scripts/build_app.sh
+APP_VERSION=2.02 APP_BUILD=5 ./Scripts/build_app.sh
 ```
 
-The local build script now ad-hoc signs the app with hardened runtime by default. For release builds, provide a Developer ID Application identity:
+The local build script ad-hoc signs the app for development. Because ad-hoc code has no stable Team ID, local builds do not enable hardened runtime. Distribution builds require a Developer ID Application identity and retain hardened runtime plus library validation:
 
 ```bash
 APP_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ./Scripts/build_app.sh
 ```
+
+To enable signed Sparkle updates in that distribution build, also provide an HTTPS appcast URL and the EdDSA public key generated for the release channel:
+
+```bash
+APP_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+SPARKLE_FEED_URL="https://example.com/metafetch/appcast.xml" \
+SPARKLE_PUBLIC_KEY="BASE64_EDDSA_PUBLIC_KEY" \
+./Scripts/build_app.sh
+```
+
+If either Sparkle value is absent, MetaFetch leaves automatic appcast updates disabled and uses the checksum-verified GitHub release workflow.
 
 Build a GitHub-release-ready DMG with checksum output:
 
@@ -101,30 +130,51 @@ APP_NOTARY_PROFILE="metafetch-notary" \
 ./Scripts/build_release_dmg.sh
 ```
 
-`APP_NOTARY_PROFILE` should be an `xcrun notarytool` keychain profile. Omit it for local unsigned/not-notarized test DMGs.
+`APP_NOTARY_PROFILE` should be an `xcrun notarytool` keychain profile. Omit it only for local test DMGs; unsigned or unnotarized artifacts must not be published.
+
+After merging the intended release commit to `main`, publish a production release with the guarded workflow:
+
+```bash
+APP_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+APP_NOTARY_PROFILE="metafetch-notary" \
+./Scripts/publish_release.sh
+```
+
+The publisher requires a clean `main` exactly matching `origin/main`, a matching release-notes file, an authenticated GitHub CLI session, an available Developer ID Application identity, and a working notarization profile. It builds, signs, notarizes, staples, Gatekeeper-assesses, checksum-verifies, and only then publishes the DMG and its sidecar. It fails closed when any prerequisite is missing.
 
 ## Updates
 
-MetaFetch checks `jaysonguglietta/MetaFetch` GitHub Releases. A release is considered newer when its tag, such as `v1.1` or `1.1`, is greater than the app’s `CFBundleShortVersionString`.
+Production builds can use Sparkle 2.9.4 with an HTTPS appcast and EdDSA public key embedded at build time. Sparkle verifies the signed appcast and release archive before installation. The feed URL and public key are release configuration, not source-controlled secrets.
 
-For in-app downloads, attach one installable asset to the GitHub release:
+MetaFetch checks `jaysonguglietta/MetaFetch` GitHub Releases. A release is considered newer when its tag, such as `v2.02` or `2.02`, is greater than the app’s `CFBundleShortVersionString`.
 
-- `.dmg`
-- `.zip`
-- `.pkg`
+GitHub returns `404` from its latest-release endpoint when a public repository has no published Releases. MetaFetch confirms that the repository itself is reachable, then treats that response as an empty release channel and explains that no downloadable version is available. Missing repositories and other HTTP failures remain errors.
 
-MetaFetch downloads the asset to the user’s Downloads folder and reveals it in Finder. It does not auto-open downloaded installers, so the final app replacement remains visible and user-confirmed instead of silently replacing a running app.
+For in-app downloads, attach an installable asset and its exact-name SHA-256 sidecar to the GitHub release:
 
-For production releases, sign and notarize installer assets before attaching them to GitHub. `Scripts/build_release_dmg.sh` creates a DMG and SHA-256 file for that workflow. The in-app updater intentionally treats GitHub release downloads as manual installs rather than silently trusted code.
+- `MetaFetch-2.02.dmg` and `MetaFetch-2.02.dmg.sha256`
+- `MetaFetch-2.02.zip` and `MetaFetch-2.02.zip.sha256`
+- `MetaFetch-2.02.pkg` and `MetaFetch-2.02.pkg.sha256`
+
+MetaFetch verifies the downloaded bytes against the sidecar before moving the asset to the user’s Downloads folder. DMG downloads must also have a valid macOS code signature; when the installed app has a Developer ID Team ID, the DMG must use the same team. MetaFetch then reveals the asset in Finder without opening it, so the final app replacement remains visible and user-confirmed instead of silently replacing a running app.
+
+For production releases, use `Scripts/publish_release.sh`; it refuses to publish until the installer has passed the complete signing, notarization, stapling, Gatekeeper, and checksum workflow. `Scripts/build_release_dmg.sh` remains available for local artifact creation. The in-app updater intentionally treats GitHub release downloads as manual installs rather than silently trusted code.
 
 ## Security Hardening
 
 - Imported files must be local, writable, regular `.mp4` files and cannot be symlinks.
+- The app is sandboxed and receives persistent watch-folder access only through a user-approved security-scoped bookmark.
 - MetaFetch stores file identity at import and re-checks it immediately before saving.
 - The native MP4 atom writer rejects oversized movie headers and overly complex atom layouts before allocating or recursing deeply.
+- Writes preserve unknown metadata atoms, use transactional rollback protection, and require full requested-field readback verification before success is reported.
 - Artwork downloads are size-bounded, MIME-checked, downsampled, cached with eviction, and rejected when redirects leave the artwork host allowlist.
-- Update downloads are size-bounded and revealed in Finder instead of opened automatically.
-- CI runs the test suite, builds the app bundle, and verifies the generated signature.
+- Metadata JSON downloads use timeouts and response-size limits; identical TVMaze episode catalogs are coalesced and cached with bounded eviction.
+- Update downloads are size-bounded, SHA-256 verified, code-signature checked for DMGs, and revealed in Finder instead of opened automatically.
+- CSV exports neutralize spreadsheet-formula prefixes in user-controlled cells.
+- JSON/NFO imports are size-bounded; XML external entity resolution is disabled.
+- Diagnostics exports are opt-in, omit API keys, filenames, and paths, and use per-export salted file identifiers.
+- Sparkle is version-pinned in `Package.resolved`; signed appcast updates are accepted only when an HTTPS feed and EdDSA public key are configured.
+- CI uses least-privilege repository permissions, a SHA-pinned checkout action, run concurrency limits, and build timeouts.
 
 ## Data Sources
 

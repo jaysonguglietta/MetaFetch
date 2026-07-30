@@ -17,6 +17,22 @@ enum MatchConfidence: String, Hashable, Sendable {
     }
 }
 
+struct MediaExternalIDs: Hashable, Codable, Sendable {
+    var imdb: String?
+    var tmdb: Int?
+    var tvmaze: Int?
+
+    init(imdb: String? = nil, tmdb: Int? = nil, tvmaze: Int? = nil) {
+        self.imdb = imdb?.trimmedNilIfBlank
+        self.tmdb = tmdb
+        self.tvmaze = tvmaze
+    }
+
+    var isEmpty: Bool {
+        imdb == nil && tmdb == nil && tvmaze == nil
+    }
+}
+
 struct MediaSearchResult: Hashable, Identifiable, Sendable {
     let trackId: Int
     let mediaKind: MediaSearchKind
@@ -38,6 +54,8 @@ struct MediaSearchResult: Hashable, Identifiable, Sendable {
     let matchScore: Int
     let seasonNumber: Int?
     let episodeNumber: Int?
+    let communityRating: Double?
+    let externalIDs: MediaExternalIDs
 
     init(
         trackId: Int,
@@ -59,7 +77,9 @@ struct MediaSearchResult: Hashable, Identifiable, Sendable {
         matchSummary: String,
         matchScore: Int,
         seasonNumber: Int?,
-        episodeNumber: Int?
+        episodeNumber: Int?,
+        communityRating: Double? = nil,
+        externalIDs: MediaExternalIDs = MediaExternalIDs()
     ) {
         self.trackId = trackId
         self.mediaKind = mediaKind
@@ -81,6 +101,8 @@ struct MediaSearchResult: Hashable, Identifiable, Sendable {
         self.matchScore = matchScore
         self.seasonNumber = seasonNumber
         self.episodeNumber = episodeNumber
+        self.communityRating = communityRating
+        self.externalIDs = externalIDs
     }
 
     var id: Int {
@@ -96,11 +118,13 @@ struct MediaSearchResult: Hashable, Identifiable, Sendable {
     }
 
     var synopsis: String {
-        let preferred = [longDescription, shortDescription]
+        persistableSynopsis ?? "No synopsis was returned for this title."
+    }
+
+    var persistableSynopsis: String? {
+        [longDescription, shortDescription]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first(where: { !$0.isEmpty })
-
-        return preferred ?? "No synopsis was returned for this title."
     }
 
     var subtitleLine: String {
@@ -175,7 +199,9 @@ struct MediaSearchResult: Hashable, Identifiable, Sendable {
             matchSummary: matchSummary,
             matchScore: matchScore,
             seasonNumber: seasonNumber,
-            episodeNumber: episodeNumber
+            episodeNumber: episodeNumber,
+            communityRating: communityRating,
+            externalIDs: externalIDs
         )
     }
 }
@@ -186,6 +212,10 @@ protocol MediaSearchServing: Sendable {
 
 protocol MetadataDiagnosticSearchServing: MediaSearchServing {
     func searchWithDiagnostics(matching query: String, mode: MediaLibraryMode) async throws -> MetadataSearchResponse
+}
+
+protocol TVSeasonCatalogServing: MediaSearchServing {
+    func episodes(forSeriesID seriesID: Int, seasonNumber: Int) async throws -> [MediaSearchResult]
 }
 
 struct MetadataSearchResponse: Sendable {
@@ -331,6 +361,12 @@ extension MetadataCatalogSearchService: MetadataDiagnosticSearchServing {
     }
 }
 
+extension MetadataCatalogSearchService: TVSeasonCatalogServing {
+    func episodes(forSeriesID seriesID: Int, seasonNumber: Int) async throws -> [MediaSearchResult] {
+        try await tvService.episodes(forSeriesID: seriesID, seasonNumber: seasonNumber)
+    }
+}
+
 private struct AlternateMovieProviderSearchService {
     private let tmdbService = TMDbMovieSearchService()
     private let omdbService = OMDbMovieSearchService()
@@ -366,6 +402,7 @@ private struct TMDbMovieSearchService {
         let releaseDate: String?
         let overview: String?
         let posterPath: String?
+        let voteAverage: Double?
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -373,6 +410,7 @@ private struct TMDbMovieSearchService {
             case releaseDate = "release_date"
             case overview
             case posterPath = "poster_path"
+            case voteAverage = "vote_average"
         }
     }
 
@@ -463,7 +501,9 @@ private struct TMDbMovieSearchService {
             matchSummary: "TMDb movie result",
             matchScore: 0,
             seasonNumber: nil,
-            episodeNumber: nil
+            episodeNumber: nil,
+            communityRating: movie.voteAverage,
+            externalIDs: MediaExternalIDs(tmdb: movie.id)
         )
 
         let evaluation = evaluateProviderMatch(
@@ -479,7 +519,7 @@ private struct TMDbMovieSearchService {
     private func performRequest<Response: Decodable>(_ url: URL, decoding type: Response.Type) async throws -> Response {
         var request = URLRequest(url: url)
         request.timeoutInterval = BoundedJSONRequest.timeoutInterval
-        request.setValue("MetaFetch/1.1", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppBuildInfo.shortUserAgent, forHTTPHeaderField: "User-Agent")
 
         let (data, response) = try await BoundedJSONRequest.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -517,6 +557,7 @@ private struct OMDbMovieSearchService {
         let Plot: String?
         let Poster: String?
         let imdbID: String?
+        let imdbRating: String?
         let Response: String
     }
 
@@ -648,7 +689,9 @@ private struct OMDbMovieSearchService {
             matchSummary: "OMDb movie result",
             matchScore: 0,
             seasonNumber: nil,
-            episodeNumber: nil
+            episodeNumber: nil,
+            communityRating: detail.imdbRating.flatMap(Double.init),
+            externalIDs: MediaExternalIDs(imdb: detail.imdbID)
         )
 
         let evaluation = evaluateProviderMatch(
@@ -669,7 +712,7 @@ private struct OMDbMovieSearchService {
     private func performRequest<Response: Decodable>(_ url: URL, decoding type: Response.Type) async throws -> Response {
         var request = URLRequest(url: url)
         request.timeoutInterval = BoundedJSONRequest.timeoutInterval
-        request.setValue("MetaFetch/1.1", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppBuildInfo.shortUserAgent, forHTTPHeaderField: "User-Agent")
 
         let (data, response) = try await BoundedJSONRequest.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -913,7 +956,7 @@ private struct WikimediaMovieSearchService {
         var request = URLRequest(url: url)
         request.timeoutInterval = BoundedJSONRequest.timeoutInterval
         request.setValue(
-            "MetaFetch/1.1 (macOS app for tagging MP4 movie files and TV episodes)",
+            AppBuildInfo.descriptiveUserAgent,
             forHTTPHeaderField: "User-Agent"
         )
 
@@ -1304,6 +1347,38 @@ private struct TVMazeSearchService {
             .sorted { lhs, rhs in lhs.matchScore > rhs.matchScore }
     }
 
+    func episodes(forSeriesID seriesID: Int, seasonNumber: Int) async throws -> [MediaSearchResult] {
+        guard seriesID > 0, seasonNumber > 0 else {
+            return []
+        }
+
+        guard let showURL = URL(string: "https://api.tvmaze.com/shows/\(seriesID)") else {
+            throw SearchError.invalidURL
+        }
+
+        let show = try await performRequest(showURL, decoding: TVMazeShow.self)
+        let episodes = try await fetchEpisodes(forShowID: seriesID)
+        return episodes
+            .filter { $0.season == seasonNumber }
+            .map { episode in
+                let query = ParsedMediaQuery(
+                    mode: .tvShow,
+                    title: show.name,
+                    year: nil,
+                    seasonNumber: episode.season,
+                    episodeNumber: episode.number,
+                    episodeTitle: episode.name
+                )
+                return buildEpisodeResult(
+                    episode: episode,
+                    show: show,
+                    showScore: 1,
+                    parsedQuery: query
+                )
+            }
+            .sorted { ($0.episodeNumber ?? Int.max) < ($1.episodeNumber ?? Int.max) }
+    }
+
     private func fetchShowMatches(for title: String) async throws -> [ShowSearchHit] {
         var components = URLComponents(string: "https://api.tvmaze.com/search/shows")
         components?.queryItems = [
@@ -1327,11 +1402,10 @@ private struct TVMazeSearchService {
             for hit in hits {
                 group.addTask {
                     do {
-                        guard let episode = try await fetchEpisode(
-                            forShowID: hit.show.id,
-                            seasonNumber: seasonNumber,
-                            episodeNumber: episodeNumber
-                        ) else {
+                        let episodes = try await fetchEpisodes(forShowID: hit.show.id)
+                        guard let episode = episodes.first(where: {
+                            $0.season == seasonNumber && $0.number == episodeNumber
+                        }) else {
                             return nil
                         }
 
@@ -1356,27 +1430,6 @@ private struct TVMazeSearchService {
 
             return matches
         }
-    }
-
-    private func fetchEpisode(
-        forShowID showID: Int,
-        seasonNumber: Int,
-        episodeNumber: Int
-    ) async throws -> TVMazeEpisode? {
-        guard var components = URLComponents(string: "https://api.tvmaze.com/shows/\(showID)/episodebynumber") else {
-            throw SearchError.invalidURL
-        }
-
-        components.queryItems = [
-            URLQueryItem(name: "season", value: String(seasonNumber)),
-            URLQueryItem(name: "number", value: String(episodeNumber)),
-        ]
-
-        guard let url = components.url else {
-            throw SearchError.invalidURL
-        }
-
-        return try await performOptionalRequest(url, decoding: TVMazeEpisode.self)
     }
 
     private func fetchEpisodeTitleMatches(
@@ -1434,49 +1487,16 @@ private struct TVMazeSearchService {
         var request = URLRequest(url: url)
         request.timeoutInterval = BoundedJSONRequest.timeoutInterval
         request.setValue(
-            "MetaFetch/1.1 (macOS app for tagging MP4 movie files and TV episodes)",
+            AppBuildInfo.descriptiveUserAgent,
             forHTTPHeaderField: "User-Agent"
         )
 
-        let (data, response) = try await BoundedJSONRequest.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw SearchError.invalidResponse
+        let response = try await TVMazeResponseCache.shared.response(for: request)
+        guard (200..<300).contains(response.statusCode) else {
+            throw SearchError.requestFailed(statusCode: response.statusCode)
         }
 
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            throw SearchError.requestFailed(statusCode: httpResponse.statusCode)
-        }
-
-        return try JSONDecoder().decode(Response.self, from: data)
-    }
-
-    private func performOptionalRequest<Response: Decodable>(
-        _ url: URL,
-        decoding type: Response.Type
-    ) async throws -> Response? {
-        var request = URLRequest(url: url)
-        request.timeoutInterval = BoundedJSONRequest.timeoutInterval
-        request.setValue(
-            "MetaFetch/1.1 (macOS app for tagging MP4 movie files and TV episodes)",
-            forHTTPHeaderField: "User-Agent"
-        )
-
-        let (data, response) = try await BoundedJSONRequest.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw SearchError.invalidResponse
-        }
-
-        if httpResponse.statusCode == 404 {
-            return nil
-        }
-
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            throw SearchError.requestFailed(statusCode: httpResponse.statusCode)
-        }
-
-        return try JSONDecoder().decode(Response.self, from: data)
+        return try JSONDecoder().decode(Response.self, from: response.data)
     }
 
     private func buildEpisodeResult(
@@ -1558,7 +1578,8 @@ private struct TVMazeSearchService {
             matchSummary: summary,
             matchScore: score,
             seasonNumber: episode.season,
-            episodeNumber: episode.number
+            episodeNumber: episode.number,
+            externalIDs: MediaExternalIDs(tvmaze: episode.id)
         )
     }
 
@@ -1627,7 +1648,8 @@ private struct TVMazeSearchService {
             matchSummary: summary,
             matchScore: score,
             seasonNumber: nil,
-            episodeNumber: nil
+            episodeNumber: nil,
+            externalIDs: MediaExternalIDs(tvmaze: show.id)
         )
     }
 
@@ -1679,7 +1701,9 @@ private extension MediaSearchResult {
             matchSummary: evaluation.summary,
             matchScore: evaluation.score,
             seasonNumber: seasonNumber,
-            episodeNumber: episodeNumber
+            episodeNumber: episodeNumber,
+            communityRating: communityRating,
+            externalIDs: externalIDs
         )
     }
 }
@@ -1873,31 +1897,4 @@ private func evaluateProviderMatch(
     }
 
     return (score, confidence, summary)
-}
-
-private enum BoundedJSONRequest {
-    static let timeoutInterval: TimeInterval = 15
-    private static let maximumResponseBytes = 4 * 1024 * 1024
-
-    static func data(for request: URLRequest) async throws -> (Data, URLResponse) {
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
-
-        if response.expectedContentLength > maximumResponseBytes {
-            throw URLError(.dataLengthExceedsMaximum)
-        }
-
-        var data = Data()
-        if response.expectedContentLength > 0 {
-            data.reserveCapacity(min(Int(response.expectedContentLength), maximumResponseBytes))
-        }
-
-        for try await byte in bytes {
-            data.append(byte)
-            if data.count > maximumResponseBytes {
-                throw URLError(.dataLengthExceedsMaximum)
-            }
-        }
-
-        return (data, response)
-    }
 }

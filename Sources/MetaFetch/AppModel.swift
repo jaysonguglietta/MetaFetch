@@ -48,6 +48,17 @@ enum TVBatchTab: String, CaseIterable, Identifiable {
     }
 }
 
+private enum SaveVerificationError: LocalizedError {
+    case fieldsDidNotMatch(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .fieldsDidNotMatch(let description):
+            return description
+        }
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     private static let safetyBackupsPreferenceKey = "MetaFetchCreateSafetyBackups"
@@ -56,6 +67,12 @@ final class AppModel: ObservableObject {
     private static let renameAfterSaveKey = "MetaFetchRenameAfterSave"
     private static let movieRenameTemplateKey = "MetaFetchMovieRenameTemplate"
     private static let tvRenameTemplateKey = "MetaFetchTVRenameTemplate"
+    private static let metadataProfileKey = "MetaFetchMetadataProfile"
+    private static let confidenceRuleKey = "MetaFetchConfidenceRule"
+    private static let extrasAutomaticMatchingKey = "MetaFetchExtrasAutomaticMatching"
+    private static let renamePresetKey = "MetaFetchRenamePreset"
+    private static let customRenamePresetsKey = "MetaFetchCustomRenamePresets"
+    private static let automaticHeadroomRepairKey = "MetaFetchAutomaticHeadroomRepair"
     private static let watchFolderPollingInterval: TimeInterval = 12
 
     @Published private(set) var files: [MovieFileEntry] = []
@@ -77,6 +94,34 @@ final class AppModel: ObservableObject {
     @Published var batchErrorMessage: String?
     @Published var lastSaveReport: SaveReport?
     @Published var presentedSaveReport: SaveReport?
+    @Published var metadataProfile: MetadataProfile {
+        didSet { UserDefaults.standard.set(metadataProfile.rawValue, forKey: Self.metadataProfileKey) }
+    }
+    @Published var confidenceRule: ConfidenceRule {
+        didSet { UserDefaults.standard.set(confidenceRule.rawValue, forKey: Self.confidenceRuleKey) }
+    }
+    @Published var allowAutomaticMatchingForExtras: Bool {
+        didSet { UserDefaults.standard.set(allowAutomaticMatchingForExtras, forKey: Self.extrasAutomaticMatchingKey) }
+    }
+    @Published var selectedRenamePresetID: String {
+        didSet { UserDefaults.standard.set(selectedRenamePresetID, forKey: Self.renamePresetKey) }
+    }
+    @Published private(set) var customRenamePresets: [RenamePreset] {
+        didSet {
+            if let data = try? JSONEncoder().encode(customRenamePresets) {
+                UserDefaults.standard.set(data, forKey: Self.customRenamePresetsKey)
+            }
+        }
+    }
+    @Published var automaticHeadroomRepair: Bool {
+        didSet { UserDefaults.standard.set(automaticHeadroomRepair, forKey: Self.automaticHeadroomRepairKey) }
+    }
+    @Published var reconciliationSeasonText = ""
+    @Published var seasonReconciliationReport: SeasonReconciliationReport?
+    @Published var isReconcilingSeason = false
+    @Published var reconciliationError: String?
+    @Published private(set) var recoveryRecords: [RecoveryRecord] = []
+    @Published var recoveryStatusMessage: String?
     @Published var tmdbAPIKey: String {
         didSet {
             MetadataProviderPreferences.tmdbAPIKey = tmdbAPIKey
@@ -135,6 +180,7 @@ final class AppModel: ObservableObject {
     private let updateService: AppUpdateChecking
     private let headroomInspector: MP4HeadroomInspecting
     private let currentMetadataReader = MP4CurrentMetadataReader()
+    private let headroomRepairService = MP4HeadroomRepairService()
     private var watchFolderTimer: Timer?
 
     init(
@@ -156,6 +202,16 @@ final class AppModel: ObservableObject {
         self.renameAfterSave = UserDefaults.standard.bool(forKey: Self.renameAfterSaveKey)
         self.movieRenameTemplate = UserDefaults.standard.string(forKey: Self.movieRenameTemplateKey)?.trimmedNilIfBlank ?? RenameTemplateDefaults.movie
         self.tvRenameTemplate = UserDefaults.standard.string(forKey: Self.tvRenameTemplateKey)?.trimmedNilIfBlank ?? RenameTemplateDefaults.tv
+        self.metadataProfile = UserDefaults.standard.string(forKey: Self.metadataProfileKey)
+            .flatMap(MetadataProfile.init(rawValue:)) ?? .balanced
+        self.confidenceRule = UserDefaults.standard.string(forKey: Self.confidenceRuleKey)
+            .flatMap(ConfidenceRule.init(rawValue:)) ?? .clearExact
+        self.allowAutomaticMatchingForExtras = UserDefaults.standard.bool(forKey: Self.extrasAutomaticMatchingKey)
+        self.selectedRenamePresetID = UserDefaults.standard.string(forKey: Self.renamePresetKey) ?? RenamePreset.builtIns[0].id
+        self.customRenamePresets = UserDefaults.standard.data(forKey: Self.customRenamePresetsKey)
+            .flatMap { try? JSONDecoder().decode([RenamePreset].self, from: $0) } ?? []
+        self.automaticHeadroomRepair = UserDefaults.standard.bool(forKey: Self.automaticHeadroomRepairKey)
+        self.watchedFolderURL = SecurityScopedAccessManager.shared.restoreWatchFolder()
     }
 
     var selectedFile: MovieFileEntry? {
@@ -196,6 +252,30 @@ final class AppModel: ObservableObject {
         selectedMode == .tvShow && files.count > 1
     }
 
+    var folderImportGroups: [FolderImportGroup] {
+        let grouped = Dictionary(grouping: files) { file -> String in
+            let parsed = FilenameTitleParser.parsedQuery(fromFileURL: file.fileURL, mode: file.mediaMode)
+            return "\(parsed.title.lowercased())|\(parsed.seasonNumber ?? -1)"
+        }
+        return grouped.values.compactMap { group in
+            guard let first = group.first else { return nil }
+            let parsed = FilenameTitleParser.parsedQuery(fromFileURL: first.fileURL, mode: first.mediaMode)
+            return FolderImportGroup(
+                showTitle: parsed.title,
+                seasonNumber: parsed.seasonNumber,
+                fileIDs: group.map(\.id)
+            )
+        }.sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending }
+    }
+
+    var renamePresets: [RenamePreset] { RenamePreset.builtIns + customRenamePresets }
+
+    var latestUndoRecord: RecoveryRecord? {
+        recoveryRecords.first {
+            $0.kind == .safetyBackup && FileManager.default.fileExists(atPath: $0.originalURL.path)
+        }
+    }
+
     var isBatchBusy: Bool {
         isBatchSearching || isBatchSaving || files.contains { $0.isSearching || $0.isSaving }
     }
@@ -233,7 +313,7 @@ final class AppModel: ObservableObject {
     }
 
     var currentAppVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1"
+        AppBuildInfo.version
     }
 
     func chooseMode(_ mode: MediaLibraryMode) {
@@ -271,6 +351,7 @@ final class AppModel: ObservableObject {
             return
         }
 
+        urls.forEach { SecurityScopedAccessManager.shared.retainAccess(to: $0) }
         let expandedImport = MediaImportURLExpander.expandedMediaFileURLs(from: urls)
         let validFiles = expandedImport.urls
             .compactMap(MediaFileImportValidator.validatedImport)
@@ -318,17 +399,20 @@ final class AppModel: ObservableObject {
             scannedFolderCount: expandedImport.scannedFolderCount
         )
         files.append(contentsOf: newEntries)
+        refreshRecoveryRecords()
         refreshBatchQuerySuggestion()
 
         if selectedFileID == nil {
             selectedFileID = newEntries.first?.id
         }
 
-        for entry in newEntries {
-            Task {
+        Task {
+            for entry in newEntries {
                 await search(file: entry)
             }
-            Task {
+        }
+        Task {
+            for entry in newEntries {
                 await loadCurrentMetadata(for: entry)
             }
         }
@@ -413,7 +497,8 @@ final class AppModel: ObservableObject {
                 file.selectedResult = suggestedAutoSelection(
                     from: results,
                     mode: file.mediaMode,
-                    parsedQuery: parsedQuery
+                    parsedQuery: parsedQuery,
+                    assetRole: file.assetRole
                 )
                 preservedSelection = nil
             }
@@ -452,6 +537,12 @@ final class AppModel: ObservableObject {
 
     @discardableResult
     func save(file: MovieFileEntry) async -> Bool {
+        guard !file.isSaving else {
+            return false
+        }
+        file.errorMessage = nil
+        file.statusMessage = "Starting metadata save"
+
         let reportEntry = await saveAndBuildReportEntry(file: file)
         let report = SaveReport(createdAt: Date(), entries: [reportEntry])
         lastSaveReport = report
@@ -481,6 +572,57 @@ final class AppModel: ObservableObject {
         file.headroomInspection = inspection
         file.isInspectingHeadroom = false
         file.statusMessage = inspection.headline
+    }
+
+    func repairHeadroom(for file: MovieFileEntry) async {
+        guard !file.isRepairingHeadroom, !file.isSaving else { return }
+        file.isRepairingHeadroom = true
+        file.errorMessage = nil
+        file.statusMessage = "Reserving poster headroom with FFmpeg"
+        do {
+            try await headroomRepairService.repair(fileURL: file.fileURL)
+            file.importIdentity = MediaFileImportValidator.identity(for: file.fileURL)
+            file.isRepairingHeadroom = false
+            file.statusMessage = "Reserved 16 MB of MP4 metadata headroom"
+            await inspectHeadroom(for: file)
+        } catch {
+            file.isRepairingHeadroom = false
+            file.statusMessage = "Headroom repair failed"
+            file.errorMessage = error.localizedDescription
+        }
+    }
+
+    func loadRawMetadata(for file: MovieFileEntry) {
+        do {
+            file.rawMetadataItems = try MP4AtomMetadataWriter().rawMetadataItems(at: file.fileURL)
+            file.rawMetadataError = nil
+        } catch {
+            file.rawMetadataItems = []
+            file.rawMetadataError = error.localizedDescription
+        }
+    }
+
+    func importMetadata(from url: URL, for file: MovieFileEntry) {
+        SecurityScopedAccessManager.shared.retainAccess(to: url)
+        do {
+            let document = try MetadataInterchange.load(from: url)
+            document.applying(to: &file.metadataDraft)
+            file.errorMessage = nil
+            file.statusMessage = "Imported metadata from \(url.lastPathComponent)"
+        } catch {
+            file.errorMessage = error.localizedDescription
+            file.statusMessage = "Metadata import failed"
+        }
+    }
+
+    func metadataExportData(for file: MovieFileEntry, format: String) throws -> Data {
+        guard let result = file.selectedResult else {
+            throw SaveVerificationError.fieldsDidNotMatch(file.mediaMode.saveSelectionError)
+        }
+        let document = MetadataInterchangeDocument(draft: file.metadataDraft, result: result)
+        return format.lowercased() == "nfo"
+            ? MetadataInterchange.nfoData(for: document)
+            : try MetadataInterchange.jsonData(for: document)
     }
 
     func resetProviderHealthHistory() {
@@ -522,10 +664,9 @@ final class AppModel: ObservableObject {
             )
         }
 
-        guard file.metadataDraft.isValid(for: selectedResult) else {
-            let message = "Enter a title before saving metadata."
+        if let message = file.metadataDraft.validationError(for: selectedResult) {
             file.errorMessage = message
-            file.statusMessage = "Metadata editor needs a title"
+            file.statusMessage = "Review the metadata editor"
             return SaveReportEntry(
                 filename: file.filename,
                 fileURL: file.fileURL,
@@ -586,6 +727,22 @@ final class AppModel: ObservableObject {
                 _ = try await ArtworkPipeline.shared.preparedArtwork(for: resultForWriting.artworkURL)
             }
 
+            if includeArtwork && automaticHeadroomRepair {
+                file.statusMessage = "Inspecting MP4 poster headroom"
+                let inspection = await headroomInspector.inspect(
+                    fileURL: file.fileURL,
+                    result: resultForWriting,
+                    includeArtwork: true
+                )
+                file.headroomInspection = inspection
+                if case .needsRewrite = inspection.status {
+                    file.statusMessage = "Reserving MP4 poster headroom with FFmpeg"
+                    try await headroomRepairService.repair(fileURL: file.fileURL)
+                    file.importIdentity = MediaFileImportValidator.identity(for: file.fileURL)
+                    file.statusMessage = "Poster headroom repaired; starting metadata save"
+                }
+            }
+
             file.statusMessage = includeArtwork
                 ? "Starting MP4 rewrite with artwork and metadata"
                 : "Starting metadata-only fast save"
@@ -600,19 +757,25 @@ final class AppModel: ObservableObject {
                     await self?.applySaveProgress(progress, toFileWithID: fileID)
                 }
             )
+            let verification = outcome.verifiedSnapshot.verification(
+                against: resultForWriting,
+                expectsArtwork: includeArtwork
+            )
+            guard verification.isVerified else {
+                throw SaveVerificationError.fieldsDidNotMatch(verification.failureDescription)
+            }
+
             file.saveProgress = 1
             file.lastSavedAt = Date()
             file.lastSaveOutcome = outcome
-            file.currentMetadataSnapshot = MP4CurrentMetadataSnapshot(
-                result: resultForWriting,
-                hasArtwork: includeArtwork
-            )
+            file.currentMetadataSnapshot = outcome.verifiedSnapshot
             file.currentMetadataError = nil
             recordTaggingHistory(
                 file: file,
                 result: resultForWriting,
                 outcome: outcome
             )
+            refreshRecoveryRecords()
             let renameMessage = renameSavedFileIfNeeded(file: file, result: resultForWriting)
             file.importIdentity = MediaFileImportValidator.identity(for: file.fileURL)
             file.isSaving = false
@@ -758,6 +921,11 @@ final class AppModel: ObservableObject {
 
         selectedBatchResult = result
         selectedBatchTab = .seasons
+        if reconciliationSeasonText.isEmpty {
+            reconciliationSeasonText = mostCommonDetectedSeason().map(String.init) ?? "1"
+        }
+        seasonReconciliationReport = nil
+        reconciliationError = nil
         batchErrorMessage = nil
         batchStatusMessage = "Applying \(showTitle) to \(files.count) episode\(files.count == 1 ? "" : "s")"
 
@@ -876,6 +1044,12 @@ final class AppModel: ObservableObject {
             return
         }
 
+        do {
+            try SecurityScopedAccessManager.shared.storeWatchFolder(folderURL)
+        } catch {
+            noticeMessage = "MetaFetch could not preserve access to that watch folder: \(error.localizedDescription)"
+            return
+        }
         watchedFolderURL = folderURL.standardizedFileURL
         isWatchingFolder = true
         scanWatchedFolder()
@@ -893,6 +1067,7 @@ final class AppModel: ObservableObject {
         watchFolderTimer = nil
         isWatchingFolder = false
         watchedFolderURL = nil
+        SecurityScopedAccessManager.shared.clearWatchFolder()
     }
 
     func scanWatchedFolder() {
@@ -923,6 +1098,8 @@ final class AppModel: ObservableObject {
 
         do {
             switch try await updateService.checkForUpdate(currentVersion: currentAppVersion) {
+            case .noPublishedRelease:
+                updateState = .noPublishedRelease
             case .upToDate(let version):
                 updateState = .upToDate(version: version)
             case .available(let update):
@@ -954,6 +1131,13 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.open(update.releaseURL)
     }
 
+    func openReleasesPage() {
+        guard let url = GitHubReleaseUpdateService.releasesPageURL else {
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
     func revealDownloadedUpdate(at fileURL: URL) {
         NSWorkspace.shared.activateFileViewerSelecting([fileURL])
     }
@@ -961,9 +1145,15 @@ final class AppModel: ObservableObject {
     private func suggestedAutoSelection(
         from results: [MediaSearchResult],
         mode: MediaLibraryMode,
-        parsedQuery: ParsedMediaQuery
+        parsedQuery: ParsedMediaQuery,
+        assetRole: MediaAssetRole
     ) -> MediaSearchResult? {
-        guard let suggestedResult = SearchSelectionPolicy.suggestedAutoSelection(from: results) else {
+        guard let suggestedResult = results.first,
+              confidenceRule.accepts(suggestedResult, runnerUp: results.dropFirst().first) else {
+            return nil
+        }
+
+        if !allowAutomaticMatchingForExtras, !assetRole.allowsAutomaticMatch {
             return nil
         }
 
@@ -974,6 +1164,139 @@ final class AppModel: ObservableObject {
         }
 
         return suggestedResult
+    }
+
+    func applyMetadataProfile(_ profile: MetadataProfile) {
+        metadataProfile = profile
+        posterSavingDefault = profile.savesPosters
+        createSafetyBackups = profile.createsBackups
+        automaticHeadroomRepair = profile.repairsHeadroom
+        renameAfterSave = profile.renamesAfterSave
+        confidenceRule = profile.confidenceRule
+        if profile == .plex || profile == .jellyfin {
+            applyRenamePreset(id: "plex")
+        }
+        noticeMessage = "Applied the \(profile.label) metadata profile."
+    }
+
+    func applyRenamePreset(id: String) {
+        guard let preset = renamePresets.first(where: { $0.id == id }) else { return }
+        selectedRenamePresetID = id
+        movieRenameTemplate = preset.movieTemplate
+        tvRenameTemplate = preset.tvTemplate
+    }
+
+    func saveCurrentRenamePreset(named rawName: String) {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= 60 else {
+            noticeMessage = "Enter a preset name between 1 and 60 characters."
+            return
+        }
+        guard movieRenameTemplate.trimmedNilIfBlank != nil,
+              tvRenameTemplate.trimmedNilIfBlank != nil else {
+            noticeMessage = "Movie and TV rename templates cannot be empty."
+            return
+        }
+
+        let preset = RenamePreset(
+            id: "custom-\(UUID().uuidString)",
+            name: name,
+            movieTemplate: movieRenameTemplate,
+            tvTemplate: tvRenameTemplate
+        )
+        customRenamePresets.append(preset)
+        selectedRenamePresetID = preset.id
+        noticeMessage = "Saved the custom rename preset “\(name)”."
+    }
+
+    func deleteSelectedRenamePreset() {
+        guard selectedRenamePresetID.hasPrefix("custom-") else {
+            noticeMessage = "Built-in rename presets cannot be deleted."
+            return
+        }
+        customRenamePresets.removeAll { $0.id == selectedRenamePresetID }
+        applyRenamePreset(id: RenamePreset.builtIns[0].id)
+        noticeMessage = "Deleted the custom rename preset."
+    }
+
+    func reconcileSelectedSeason() async {
+        guard selectedMode == .tvShow,
+              let series = selectedBatchResult,
+              series.mediaKind == .tvSeries,
+              let season = Int(reconciliationSeasonText),
+              season > 0 else {
+            reconciliationError = "Choose a TV series and enter a positive season number first."
+            return
+        }
+        guard let catalog = searchService as? TVSeasonCatalogServing else {
+            reconciliationError = "The configured TV provider cannot load a complete season catalog."
+            return
+        }
+        isReconcilingSeason = true
+        reconciliationError = nil
+        do {
+            let episodes = try await catalog.episodes(forSeriesID: series.trackId, seasonNumber: season)
+            seasonReconciliationReport = SeasonReconciler.build(
+                seriesTitle: series.trackName,
+                seasonNumber: season,
+                providerEpisodes: episodes,
+                localFiles: files
+            )
+            isReconcilingSeason = false
+            batchStatusMessage = "Reconciled Season \(season): \(seasonReconciliationReport?.matchedCount ?? 0) matched, \(seasonReconciliationReport?.attentionCount ?? 0) need attention."
+        } catch {
+            isReconcilingSeason = false
+            reconciliationError = error.localizedDescription
+        }
+    }
+
+    func applyReconciledMatches() {
+        guard let report = seasonReconciliationReport else { return }
+        var applied = 0
+        for row in report.rows where row.status == .matched {
+            guard let result = row.providerResult, let fileID = row.localFileIDs.first,
+                  let file = files.first(where: { $0.id == fileID }) else { continue }
+            file.selectedResult = result
+            file.statusMessage = "Applied from season reconciliation"
+            applied += 1
+        }
+        batchStatusMessage = "Applied \(applied) unambiguous season match\(applied == 1 ? "" : "es")."
+    }
+
+    func refreshRecoveryRecords() {
+        recoveryRecords = RecoveryCenterService.discover(near: files.map(\.fileURL))
+    }
+
+    func restoreRecoveryRecord(_ record: RecoveryRecord) async {
+        recoveryStatusMessage = "Restoring \(record.originalURL.lastPathComponent)"
+        do {
+            try await RecoveryCenterService.restore(record)
+            if let file = files.first(where: { $0.fileURL.standardizedFileURL == record.originalURL.standardizedFileURL }) {
+                file.importIdentity = MediaFileImportValidator.identity(for: file.fileURL)
+                await loadCurrentMetadata(for: file)
+            }
+            refreshRecoveryRecords()
+            recoveryStatusMessage = "Restored and verified \(record.originalURL.lastPathComponent)."
+        } catch {
+            recoveryStatusMessage = "Restore failed: \(error.localizedDescription)"
+        }
+    }
+
+    func undoLastSave() async {
+        guard let record = latestUndoRecord else {
+            recoveryStatusMessage = "No usable safety backup is available for Undo Last Save."
+            return
+        }
+        await restoreRecoveryRecord(record)
+    }
+
+    func diagnosticsData() throws -> Data {
+        try DiagnosticsExporter.data(
+            appVersion: currentAppVersion,
+            files: files,
+            providerHealth: providerHealthRecords,
+            taggingHistory: taggingHistoryRecords
+        )
     }
 
     private func advanceSelection(afterSaving savedFile: MovieFileEntry) {
@@ -1202,6 +1525,15 @@ final class AppModel: ObservableObject {
         isBatchSaving = false
         batchStatusMessage = "Search for the show once, then apply it to every loaded episode."
         batchErrorMessage = nil
+        reconciliationSeasonText = ""
+        seasonReconciliationReport = nil
+        reconciliationError = nil
+    }
+
+    private func mostCommonDetectedSeason() -> Int? {
+        let seasons = files.compactMap { $0.parsedCurrentQuery.seasonNumber }
+        return Dictionary(grouping: seasons, by: { $0 })
+            .max { $0.value.count < $1.value.count }?.key
     }
 
     private func importSummary(
@@ -1235,201 +1567,6 @@ final class AppModel: ObservableObject {
 
         let message = parts.joined(separator: ", ")
         return message.prefix(1).uppercased() + message.dropFirst() + "."
-    }
-}
-
-struct ValidatedMediaFile: Sendable {
-    let url: URL
-    let identity: MediaFileIdentity?
-}
-
-struct ExpandedImportURLs: Sendable {
-    let urls: [URL]
-    let rejectedCount: Int
-    let scannedFolderCount: Int
-}
-
-enum MediaImportURLExpander {
-    static func expandedMediaFileURLs(from urls: [URL]) -> ExpandedImportURLs {
-        var expandedURLs: [URL] = []
-        var rejectedCount = 0
-        var scannedFolderCount = 0
-
-        for url in urls {
-            let standardizedURL = url.standardizedFileURL
-
-            guard standardizedURL.isFileURL else {
-                rejectedCount += 1
-                continue
-            }
-
-            if isDirectory(standardizedURL) {
-                scannedFolderCount += 1
-                expandedURLs.append(contentsOf: mp4Files(in: standardizedURL))
-            } else if standardizedURL.pathExtension.caseInsensitiveCompare("mp4") == .orderedSame {
-                expandedURLs.append(standardizedURL)
-            } else {
-                rejectedCount += 1
-            }
-        }
-
-        let uniqueSortedURLs = Array(Set(expandedURLs.map(\.standardizedFileURL)))
-            .sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
-
-        return ExpandedImportURLs(
-            urls: uniqueSortedURLs,
-            rejectedCount: rejectedCount,
-            scannedFolderCount: scannedFolderCount
-        )
-    }
-
-    private static func isDirectory(_ url: URL) -> Bool {
-        guard let values = try? url.resourceValues(forKeys: [
-            .isDirectoryKey,
-            .isReadableKey,
-            .isSymbolicLinkKey,
-        ]) else {
-            return false
-        }
-
-        return values.isDirectory == true &&
-            values.isReadable == true &&
-            values.isSymbolicLink != true
-    }
-
-    private static func mp4Files(in folderURL: URL) -> [URL] {
-        guard let enumerator = FileManager.default.enumerator(
-            at: folderURL,
-            includingPropertiesForKeys: [
-                .isDirectoryKey,
-                .isReadableKey,
-                .isRegularFileKey,
-                .isSymbolicLinkKey,
-            ],
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else {
-            return []
-        }
-
-        var files: [URL] = []
-
-        for case let fileURL as URL in enumerator {
-            if let values = try? fileURL.resourceValues(forKeys: [
-                .isDirectoryKey,
-                .isSymbolicLinkKey,
-            ]),
-               values.isDirectory == true {
-                if values.isSymbolicLink == true {
-                    enumerator.skipDescendants()
-                }
-                continue
-            }
-
-            guard fileURL.pathExtension.caseInsensitiveCompare("mp4") == .orderedSame,
-                  MediaFileImportValidator.validatedImport(fileURL) != nil else {
-                continue
-            }
-
-            files.append(fileURL.standardizedFileURL)
-        }
-
-        return files
-    }
-}
-
-struct MediaFileIdentity: Equatable, Sendable {
-    let systemNumber: UInt64
-    let fileNumber: UInt64
-}
-
-enum MediaFileImportValidator {
-    enum ValidationError: LocalizedError {
-        case unsafeFile
-        case fileChanged
-
-        var errorDescription: String? {
-            switch self {
-            case .unsafeFile:
-                return "MetaFetch stopped before saving because the file is no longer a local, writable `.mp4` file."
-            case .fileChanged:
-                return "MetaFetch stopped before saving because this file changed after it was imported. Remove it and add it again before tagging."
-            }
-        }
-    }
-
-    static func validatedImportURL(_ url: URL) -> URL? {
-        validatedImport(url)?.url
-    }
-
-    static func validatedImport(_ url: URL) -> ValidatedMediaFile? {
-        let standardizedURL = url.standardizedFileURL
-        guard standardizedURL.isFileURL,
-              standardizedURL.pathExtension.caseInsensitiveCompare("mp4") == .orderedSame,
-              let resourceValues = try? standardizedURL.resourceValues(forKeys: [
-                .isReadableKey,
-                .isRegularFileKey,
-                .isSymbolicLinkKey,
-                .isWritableKey,
-              ]),
-              resourceValues.isRegularFile == true,
-              resourceValues.isReadable == true,
-              resourceValues.isWritable == true,
-              resourceValues.isSymbolicLink != true else {
-            return nil
-        }
-
-        return ValidatedMediaFile(
-            url: standardizedURL,
-            identity: identity(for: standardizedURL)
-        )
-    }
-
-    static func validateStillSafeToWrite(
-        _ url: URL,
-        expectedIdentity: MediaFileIdentity?
-    ) throws {
-        guard let validatedFile = validatedImport(url) else {
-            throw ValidationError.unsafeFile
-        }
-
-        if let expectedIdentity,
-           let currentIdentity = validatedFile.identity,
-           currentIdentity != expectedIdentity {
-            throw ValidationError.fileChanged
-        }
-    }
-
-    static func identity(for url: URL) -> MediaFileIdentity? {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.standardizedFileURL.path),
-              let systemNumber = unsignedIntegerAttribute(attributes[.systemNumber]),
-              let fileNumber = unsignedIntegerAttribute(attributes[.systemFileNumber]) else {
-            return nil
-        }
-
-        return MediaFileIdentity(
-            systemNumber: systemNumber,
-            fileNumber: fileNumber
-        )
-    }
-
-    private static func unsignedIntegerAttribute(_ value: Any?) -> UInt64? {
-        if let number = value as? NSNumber {
-            return number.uint64Value
-        }
-
-        if let value = value as? UInt64 {
-            return value
-        }
-
-        if let value = value as? UInt {
-            return UInt64(value)
-        }
-
-        if let value = value as? Int, value >= 0 {
-            return UInt64(value)
-        }
-
-        return nil
     }
 }
 

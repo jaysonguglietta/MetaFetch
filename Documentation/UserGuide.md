@@ -1,10 +1,10 @@
 # MetaFetch User Guide
 
-MetaFetch tags MP4 files with movie or TV episode metadata. It does not delete your files. When saving, it updates the original file with Apple/iTunes-style MP4 metadata atoms when possible, or writes a tagged temporary copy and replaces the original when the container needs to be rebuilt.
+MetaFetch tags MP4 files with movie or TV episode metadata. It does not intentionally delete your media. When saving, it updates the original file with Apple/iTunes-style MP4 metadata atoms when possible, or writes a tagged temporary copy and transactionally replaces the original when the container needs to be rebuilt.
 
-For speed, MetaFetch does not create a sidecar safety backup by default. Metadata-only saves write directly to the original MP4 header. Container rebuilds still write a temporary tagged copy first, then replace the original when the rebuild finishes. If you want extra protection, enable `Create Safety Backups` from the `Options` toolbar menu before saving.
+For speed, MetaFetch does not keep a user-visible sidecar safety backup by default. Fast header saves retain the overwritten header bytes in memory when safely bounded. Container rebuilds stage both the rewritten MP4 and temporary rollback copy in Apple’s item-replacement area on the movie’s own volume, then coordinate an atomic replacement and read-back verification. If you want a separate recovery copy that remains after saving, enable `Create Safety Backups` from the `Options` toolbar menu before saving.
 
-After every save, MetaFetch reads the MP4 back and verifies that core tags such as title and show name actually persisted. If a metadata-only fast save reports success but the tags are not readable afterward, MetaFetch falls back to a full container rewrite instead of silently leaving the file untagged.
+After every save, MetaFetch reads the MP4 back and verifies every requested field, the media kind, season/episode numbers, and requested artwork. If a metadata-only fast save does not verify, MetaFetch restores the original header and falls back to a full container rewrite. A rebuilt file is not committed unless it also passes verification.
 
 MetaFetch also remembers the file identity when you import a file. If that path becomes a symlink, stops being a writable local MP4, or points to a different file before saving, MetaFetch stops before writing and asks you to remove and re-add the file.
 
@@ -74,6 +74,8 @@ Batch controls:
 - `Search Show`: Finds shared show cards in the right-side search table.
 - `Series`: Pick the show match that should drive the whole batch.
 - `Seasons`: Review the loaded files by detected season and episode code, then jump into any row that needs attention.
+- `Reconcile Season`: Downloads the selected show's complete season catalog, marks matched, missing, duplicate, and unknown rows, and applies only one-to-one matches.
+- `Export CSV Plan` / `Export JSON Plan`: Saves a read-only dry run containing every episode status, planned action, provider source, and local filename before any matches are applied. Exports omit full filesystem paths, and CSV cells are protected against spreadsheet formulas.
 - `Data`: Inspect the selected episode metadata and choose a different returned match for that file when needed.
 - `Cover`: Choose episode-specific artwork or apply the selected series cover to every tagged episode.
 - Clicking a show card applies that show to every loaded episode file.
@@ -81,15 +83,21 @@ Batch controls:
 
 ## What Gets Written
 
-MetaFetch writes the selected title, description, genre when available, media kind, and artwork when poster saving is enabled. These are written as MP4 `moov/udta/meta/ilst` atoms so Apple-style media apps can read them.
+MetaFetch writes the selected title, description, genre, content/community ratings, external IDs, media kind, and artwork when poster saving is enabled. These are written as MP4 `moov/udta/meta/ilst` atoms so Apple-style media apps can read them. External IDs currently appear in the managed comment metadata so they remain portable across the native and AVFoundation save paths.
 
 Movie files receive movie-style metadata from Wikipedia, including a downloaded synopsis/description, year, genre, director when it can be parsed, source link, and artwork when available. TV episode files receive episode-focused metadata from TVMaze, including episode title, show title, season number, episode number, downloaded episode description, network, source link, and episode or series artwork.
 
 The `Downloaded Details` panel shows the source description. The `Manual Edit` panel shows the editable values that MetaFetch will actually write, including sort title, sort series, and an optional custom poster image. In TV batch mode, use the `Data` tab to review and edit the selected episode's downloaded details.
 
+Clearing an optional field in `Manual Edit` removes that MetaFetch-managed tag instead of silently restoring the provider value. A display message such as “No synopsis was returned” is never written as the file description. Metadata atoms that MetaFetch does not manage are preserved during native rewrites.
+
 Release date accepts `YYYY`, `YYYY-MM-DD`, or a full ISO date. Year-only entries remain valid for quick tagging, while full dates are useful when a metadata provider has only partial release information.
 
 The `Tag Preview Diff` panel compares the current MP4 tags with the final edited values when MetaFetch can read existing tags. If no existing tags are readable, it falls back to comparing provider values with the final edited values. Use it as a last sanity check before saving, especially after manual edits or batch-applied series choices.
+
+Use `Import JSON / NFO` to populate the manual editor from an interchange file. Use `Export JSON` or `Export NFO` to create a sidecar from the current draft. Imports are limited to 1 MiB, and NFO parsing does not resolve external entities. `Raw MP4 Tags` shows the underlying atom type, key, and value MetaFetch can read without changing the file.
+
+If a single-file save needs attention, the save button remains clickable and the exact blocking reason appears beneath it. Clicking it also opens a save report with the same recovery guidance. Batch saves remain limited to rows whose metadata is already valid and confirmed.
 
 ## Metadata Providers
 
@@ -133,7 +141,9 @@ Use `Open Source` on result cards to inspect the source page before choosing a m
 
 Use `Check Poster Headroom` before saving artwork to estimate whether the selected tags and poster fit in the reserved MP4 header space. The save report confirms the actual path used: fast metadata-only, native container rewrite, or AVFoundation rewrite.
 
-After every single or batch save, MetaFetch shows a save report with verified files, failures, duration, poster state, backup location when safety backups are enabled, and the write path used for each MP4. Use the toolbar `Report` button to reopen the latest report, or export it as CSV or JSON.
+`Reserve 16 MB Headroom` runs a stream-copy FFmpeg remux and transactionally replaces the original only after the result passes MP4 validation. In Advanced Preferences, `Automatically repair poster headroom` performs this inspection and repair automatically before poster saves when needed. MetaFetch accepts FFmpeg only from `/opt/homebrew/bin/ffmpeg` or `/usr/local/bin/ffmpeg`, and the option is off by default.
+
+After every single or batch save, MetaFetch shows a save report with verified files, failures, duration, poster state, backup location when safety backups are enabled, and the write path used for each MP4. Use the toolbar `Report` button to reopen the latest report, or export it as CSV or JSON. CSV text is escaped so filenames or titles beginning with spreadsheet formula characters remain plain text when opened in a spreadsheet.
 
 If a report has failures, use `Retry Failed` to rerun the failed rows or `Retry Without Posters` to attempt a faster metadata-only retry.
 
@@ -153,12 +163,18 @@ Use `Options > Advanced Preferences` for power-user workflow controls:
 
 - `Save poster artwork by default`: Controls the default poster behavior for newly imported files. You can still change poster saving per file.
 - `Create safety backups before writing`: Creates recoverable sidecar backups before saves when protection matters more than speed.
+- `Automatically repair poster headroom`: Uses trusted local FFmpeg to reserve 16 MiB before a poster save only when inspection predicts a rewrite.
 - `Preferred movie provider`: Gives Wikipedia, TMDb, or OMDb a ranking boost without hiding other sources.
+- `Metadata Profile`: Applies a coherent poster, backup, rename, confidence, and headroom policy for balanced, speed, archival, Plex, or Jellyfin workflows.
+- `Auto-selection rule`: Requires clear exact, any exact, strong-or-better, or fully manual result selection.
+- `Allow automatic matches for trailers and extras`: Opts into automation for filenames MetaFetch otherwise keeps in manual review.
 - `Auto-apply a clear exact show match`: Lets TV batch mode apply a confident show result across loaded episodes automatically.
-- `Rename files after successful save`: Renames verified files using templates like `{title} ({year})` or `{series} - {season_episode} - {title}`.
+- `Rename files after successful save`: Renames verified files using templates like `{title} ({year})` or `{series} - {season_episode} - {title}`. Save the current templates as a custom preset or delete a custom preset later; built-ins remain protected.
 - `Watch Folder`: Polls a selected folder and queues new local writable MP4 files automatically.
 - `Provider Health`: Keeps local searched/skipped/failed counts so provider issues are easier to troubleshoot.
 - `Tagging History`: Keeps a short local list of recently verified saves and exports that history as CSV.
+- `Recovery Center`: Finds safety backups and interrupted-write journals near loaded files. `Undo Last Save` restores the newest usable safety backup transactionally and verifies the result.
+- `Redacted Diagnostics`: Exports opt-in app/provider/save state without API keys, filenames, or paths; per-export salted identifiers correlate rows only inside that one bundle.
 
 Queue filters are available in the sidebar and TV episode list. They filter loaded files by exact match, needs review, series-only, saved, failed, or has poster without removing anything.
 
@@ -168,11 +184,13 @@ Use the `Help` toolbar button for a quick version of this guide inside MetaFetch
 
 ## Updates
 
-Use `Updates` in the toolbar or `Check for Updates...` from the app menu to ask GitHub whether a newer MetaFetch release is available.
+Use `Updates` in the toolbar or `Check for Updates...` from the app menu. A production build configured with a signed Sparkle appcast uses Sparkle for update installation. Other builds use the verified GitHub release workflow below.
 
-MetaFetch compares the installed app version with the latest release tag in `jaysonguglietta/MetaFetch`. Tags like `v1.1` and `1.1` are both understood as version `1.1`.
+MetaFetch compares the installed app version with the latest release tag in `jaysonguglietta/MetaFetch`. Tags like `v2.02` and `2.02` are both understood as version `2.02`.
 
-If the newer release includes a `.dmg`, `.zip`, or `.pkg` asset, MetaFetch can download it to your Downloads folder and reveal it in Finder. It does not open downloaded installers automatically. Open the downloaded file only after you trust the GitHub release.
+If the repository has no published Releases, GitHub's latest-release endpoint returns `404`. MetaFetch confirms that the repository itself is still reachable, presents `No Published Release Yet`, keeps the installed version unchanged, and offers a link to the Releases page. A missing repository or other HTTP failure remains an error.
+
+If the newer release includes a `.dmg`, `.zip`, or `.pkg` asset plus a matching `<asset-name>.sha256` file, MetaFetch can download it to your Downloads folder and reveal it in Finder. The app verifies the checksum first. DMG files must also have a valid macOS code signature and, for Developer ID builds, match the installed app's signing team. MetaFetch does not open downloaded installers automatically.
 
 If the update checker says a release has no installable asset, open the release page and download the app manually.
 
@@ -188,13 +206,16 @@ If the update checker says a release has no installable asset, open the release 
 - If TV mode only finds the series, add an episode code like `S01E03`.
 - If a season folder imports nothing, make sure it contains local writable `.mp4` files and is not a symlink or package.
 - If you are tagging several TV episodes, use the batch workspace to search the show once, apply it to all files, review badges, and save all selected matches with posters.
+- Before applying a large season reconciliation, export its CSV or JSON plan from the `Seasons` tab and review every row marked `No change`.
 - If the sidebar is hidden, use `Hide Sidebar` / `Show Sidebar` in the toolbar.
 - If saving is slow, use `Check Poster Headroom`; the MP4 may not have enough metadata space for a poster and may need a container rebuild.
+- If FFmpeg is installed through Homebrew, use `Reserve 16 MB Headroom` or enable automatic repair. A repair failure leaves the original in place.
 - If a newly converted MP4 never accepts tags quickly, rebuild it with MP4 metadata headroom such as `-moov_size 16777216`.
 - If MetaFetch says the file changed after import, remove that row and add the MP4 again. This protects against tagging the wrong filesystem object.
-- If update checking fails, confirm you can reach GitHub and that the latest release includes a `.dmg`, `.zip`, or `.pkg` asset.
+- If update downloading fails, confirm the GitHub release contains both the installer and its exact `<asset-name>.sha256` sidecar. DMGs must be signed, and production DMGs should be notarized.
 - If the app feels stuck on a bad batch, use `Start Over` to clear the queue and choose a mode again.
 - If you enable `Create Safety Backups`, MetaFetch leaves `.metafetch-backup-*` files next to the original MP4 so you can recover manually if needed.
+- If a safety backup exists for a loaded file, open Advanced Preferences > Recovery Center and use `Undo Last Save` or restore a specific record.
 
 ## Feature Suggestions
 

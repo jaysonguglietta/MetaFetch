@@ -1,5 +1,13 @@
 import Foundation
 
+struct MP4RawMetadataItem: Identifiable, Hashable, Sendable {
+    let key: String
+    let kind: String
+    let value: String
+
+    var id: String { "\(key)-\(kind)-\(value)" }
+}
+
 struct MP4AtomMetadataWriter: Sendable {
     enum AtomWriterError: LocalizedError {
         case missingMovieAtom
@@ -10,6 +18,8 @@ struct MP4AtomMetadataWriter: Sendable {
         case atomCountTooHigh
         case chunkOffsetOverflow
         case fileReadFailed
+        case metadataVerificationFailed
+        case rollbackFailed
 
         var errorDescription: String? {
             switch self {
@@ -29,13 +39,39 @@ struct MP4AtomMetadataWriter: Sendable {
                 return "The MP4 uses 32-bit chunk offsets that cannot be adjusted safely."
             case .fileReadFailed:
                 return "MetaFetch could not read the full MP4 atom data."
+            case .metadataVerificationFailed:
+                return "The MP4 metadata did not verify, so MetaFetch restored the original header."
+            case .rollbackFailed:
+                return "MetaFetch could not restore the original MP4 header after a failed write."
             }
         }
     }
 
     private static let maximumMovieAtomBytes: UInt64 = 128 * 1024 * 1024
+    private static let maximumInPlaceRollbackBytes: UInt64 = 256 * 1024 * 1024
     private static let maximumAtomNestingDepth = 32
     private static let maximumAtomsPerParse = 100_000
+    private static let managedMetadataTypes: Set<MP4AtomType> = [
+        .album,
+        .albumArtist,
+        .artist,
+        .comment,
+        .coverArt,
+        .description,
+        .episodeId,
+        .genre,
+        .longDescription,
+        .mediaKind,
+        .name,
+        .releaseDate,
+        .sortAlbum,
+        .sortName,
+        .sortShow,
+        .trackNumber,
+        .tvEpisode,
+        .tvSeason,
+        .tvShow,
+    ]
 
     func writeMetadata(
         to fileURL: URL,
@@ -86,6 +122,8 @@ struct MP4AtomMetadataWriter: Sendable {
             to: fileURL,
             movieBox: movieBox,
             oldReservedSize: oldReservedSize,
+            result: result,
+            expectsArtwork: artworkData != nil,
             progressHandler: progressHandler
         ) {
             return .nativeMetadataOnly
@@ -116,6 +154,8 @@ struct MP4AtomMetadataWriter: Sendable {
             movieBox: movieBox,
             followingFreeBox: followingFreeBox,
             updatedMovieAtom: updatedMovieAtom,
+            result: result,
+            expectsArtwork: artworkData != nil,
             progressHandler: progressHandler
         )
 
@@ -192,6 +232,32 @@ struct MP4AtomMetadataWriter: Sendable {
         )
     }
 
+    func rawMetadataItems(at fileURL: URL) throws -> [MP4RawMetadataItem] {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+
+        let fileSize = try handle.seekToEnd()
+        let topLevelBoxes = try readTopLevelBoxes(from: handle, fileSize: fileSize)
+        guard let movieBox = topLevelBoxes.first(where: { $0.type == .moov }) else {
+            throw AtomWriterError.missingMovieAtom
+        }
+
+        let metadata = try readMetadata(from: readMovieAtomData(from: handle, movieBox: movieBox))
+        var items = metadata.textValuesByType.flatMap { type, values in
+            values.map { MP4RawMetadataItem(key: type.displayName, kind: "Text", value: $0) }
+        }
+        items += metadata.integerValuesByType.flatMap { type, values in
+            values.map { MP4RawMetadataItem(key: type.displayName, kind: "Integer", value: String($0)) }
+        }
+        if metadata.hasArtwork {
+            items.append(MP4RawMetadataItem(key: MP4AtomType.coverArt.displayName, kind: "Artwork", value: "Embedded image data"))
+        }
+        return items.sorted {
+            if $0.key == $1.key { return $0.value < $1.value }
+            return $0.key < $1.key
+        }
+    }
+
     func metadataWasPersisted(
         at fileURL: URL,
         result: MediaSearchResult,
@@ -230,7 +296,21 @@ struct MP4AtomMetadataWriter: Sendable {
             return false
         }
 
-        if expectsArtwork && !metadata.hasArtwork {
+        let snapshot = MP4CurrentMetadataSnapshot(
+            title: metadata.firstText(for: [.name]),
+            seriesName: metadata.firstText(for: [.tvShow, .album]),
+            creator: metadata.firstText(for: [.artist, .albumArtist]),
+            genre: metadata.firstText(for: [.genre]),
+            year: firstYear(in: metadata.firstText(for: [.releaseDate])),
+            synopsis: metadata.firstText(for: [.longDescription, .description]),
+            sortTitle: metadata.firstText(for: [.sortName]),
+            sortSeriesName: metadata.firstText(for: [.sortShow, .sortAlbum]),
+            seasonNumber: metadata.firstInteger(for: [.tvSeason]).map(String.init),
+            episodeNumber: metadata.firstInteger(for: [.tvEpisode]).map(String.init),
+            hasArtwork: metadata.hasArtwork
+        )
+
+        if !snapshot.verification(against: result, expectsArtwork: expectsArtwork).isVerified {
             return false
         }
 
@@ -260,10 +340,14 @@ struct MP4AtomMetadataWriter: Sendable {
         to fileURL: URL,
         movieBox: MP4FileAtom,
         oldReservedSize: UInt64,
+        result: MediaSearchResult,
+        expectsArtwork: Bool,
         progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)?
     ) async throws -> Bool {
         let newSize = UInt64(updatedMovieAtom.count)
-        guard newSize <= oldReservedSize else {
+        guard newSize <= oldReservedSize,
+              oldReservedSize <= Self.maximumInPlaceRollbackBytes,
+              oldReservedSize <= UInt64(Int.max) else {
             return false
         }
 
@@ -277,19 +361,42 @@ struct MP4AtomMetadataWriter: Sendable {
             message: "Writing metadata into existing MP4 header space"
         ))
 
-        let handle = try FileHandle(forUpdating: fileURL)
-        defer {
-            try? handle.close()
+        let originalRegion = try readRegion(
+            at: movieBox.start,
+            length: oldReservedSize,
+            from: fileURL
+        )
+
+        do {
+            let handle = try FileHandle(forUpdating: fileURL)
+            defer {
+                try? handle.close()
+            }
+
+            try handle.seek(toOffset: movieBox.start)
+            try handle.write(contentsOf: updatedMovieAtom)
+
+            if leftoverSize > 0 {
+                try handle.write(contentsOf: makeFreeAtom(byteCount: Int(leftoverSize)))
+            }
+
+            try handle.synchronize()
+
+            guard try metadataWasPersisted(
+                at: fileURL,
+                result: result,
+                expectsArtwork: expectsArtwork
+            ) else {
+                throw AtomWriterError.metadataVerificationFailed
+            }
+        } catch {
+            do {
+                try restoreRegion(originalRegion, at: movieBox.start, in: fileURL)
+            } catch {
+                throw AtomWriterError.rollbackFailed
+            }
+            throw error
         }
-
-        try handle.seek(toOffset: movieBox.start)
-        try handle.write(contentsOf: updatedMovieAtom)
-
-        if leftoverSize > 0 {
-            try handle.write(contentsOf: makeFreeAtom(byteCount: Int(leftoverSize)))
-        }
-
-        try handle.synchronize()
 
         await progressHandler?(MetadataWriteProgress(
             fractionCompleted: 0.82,
@@ -305,10 +412,15 @@ struct MP4AtomMetadataWriter: Sendable {
         movieBox: MP4FileAtom,
         followingFreeBox: MP4FileAtom?,
         updatedMovieAtom: Data,
+        result: MediaSearchResult,
+        expectsArtwork: Bool,
         progressHandler: (@Sendable (MetadataWriteProgress) async -> Void)?
     ) async throws {
-        let temporaryURL = fileURL.deletingLastPathComponent()
-            .appendingPathComponent(".\(fileURL.lastPathComponent).metafetch-\(UUID().uuidString).tmp")
+        let stagingLocation = try TransactionalFileReplacement.makeStagingLocation(
+            for: fileURL,
+            pathExtension: "mp4"
+        )
+        let temporaryURL = stagingLocation.fileURL
 
         _ = FileManager.default.createFile(atPath: temporaryURL.path, contents: nil)
 
@@ -321,7 +433,7 @@ struct MP4AtomMetadataWriter: Sendable {
             try? output.close()
 
             if !didFinish {
-                try? FileManager.default.removeItem(at: temporaryURL)
+                stagingLocation.remove()
             }
         }
 
@@ -362,13 +474,43 @@ struct MP4AtomMetadataWriter: Sendable {
         try output.close()
         try input.close()
 
-        _ = try FileManager.default.replaceItemAt(
-            fileURL,
-            withItemAt: temporaryURL,
-            backupItemName: nil,
-            options: []
-        )
+        try await TransactionalFileReplacement.install(
+            preparedFileURL: temporaryURL,
+            replacing: fileURL
+        ) {
+            try metadataWasPersisted(
+                at: fileURL,
+                result: result,
+                expectsArtwork: expectsArtwork
+            )
+        }
         didFinish = true
+        stagingLocation.remove()
+    }
+
+    private func readRegion(at offset: UInt64, length: UInt64, from fileURL: URL) throws -> Data {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer {
+            try? handle.close()
+        }
+
+        try handle.seek(toOffset: offset)
+        let data = handle.readData(ofLength: Int(length))
+        guard UInt64(data.count) == length else {
+            throw AtomWriterError.fileReadFailed
+        }
+        return data
+    }
+
+    private func restoreRegion(_ data: Data, at offset: UInt64, in fileURL: URL) throws {
+        let handle = try FileHandle(forUpdating: fileURL)
+        defer {
+            try? handle.close()
+        }
+
+        try handle.seek(toOffset: offset)
+        try handle.write(contentsOf: data)
+        try handle.synchronize()
     }
 
     private func copyRange(
@@ -428,31 +570,43 @@ struct MP4AtomMetadataWriter: Sendable {
         metadataItems: [Data]
     ) throws -> Data {
         let boxes = try parseAtoms(in: moviePayload, range: 0..<moviePayload.count)
-        let metadataAtom = try makeMetadataAtom(with: metadataItems)
 
         if let userDataBox = boxes.first(where: { $0.type == .udta }) {
             let updatedUserDataAtom = try updatedUserDataAtom(
                 userDataBox,
                 in: moviePayload,
-                metadataAtom: metadataAtom
+                metadataItems: metadataItems,
+                replaceArtwork: metadataItems.contains { item in
+                    item.count >= 8 && MP4AtomType(data: item, offset: 4) == .coverArt
+                }
             )
             return replacing(userDataBox.fullRange, in: moviePayload, with: updatedUserDataAtom)
         }
 
         var updatedPayload = moviePayload
-        updatedPayload.append(try makeAtom(type: .udta, payload: metadataAtom))
+        updatedPayload.append(try makeAtom(
+            type: .udta,
+            payload: makeMetadataAtom(with: metadataItems)
+        ))
         return updatedPayload
     }
 
     private func updatedUserDataAtom(
         _ userDataBox: MP4MemoryAtom,
         in moviePayload: Data,
-        metadataAtom: Data
+        metadataItems: [Data],
+        replaceArtwork: Bool
     ) throws -> Data {
         let userDataPayload = moviePayload.subdata(in: userDataBox.payloadRange)
         let boxes = try parseAtoms(in: userDataPayload, range: 0..<userDataPayload.count)
 
         if let metaBox = boxes.first(where: { $0.type == .meta }) {
+            let metadataAtom = try mergedMetadataAtom(
+                metaBox,
+                in: userDataPayload,
+                metadataItems: metadataItems,
+                replaceArtwork: replaceArtwork
+            )
             return try makeAtom(
                 type: .udta,
                 payload: replacing(metaBox.fullRange, in: userDataPayload, with: metadataAtom)
@@ -460,8 +614,58 @@ struct MP4AtomMetadataWriter: Sendable {
         }
 
         var updatedPayload = userDataPayload
-        updatedPayload.append(metadataAtom)
+        updatedPayload.append(try makeMetadataAtom(with: metadataItems))
         return try makeAtom(type: .udta, payload: updatedPayload)
+    }
+
+    private func mergedMetadataAtom(
+        _ metaBox: MP4MemoryAtom,
+        in userDataPayload: Data,
+        metadataItems: [Data],
+        replaceArtwork: Bool
+    ) throws -> Data {
+        guard metaBox.payloadRange.count >= 4 else {
+            throw AtomWriterError.invalidAtomLayout
+        }
+
+        let flagsRange = metaBox.payloadRange.lowerBound..<(metaBox.payloadRange.lowerBound + 4)
+        let childrenRange = flagsRange.upperBound..<metaBox.payloadRange.upperBound
+        let children = try parseAtoms(in: userDataPayload, range: childrenRange)
+        var managedTypes = Self.managedMetadataTypes
+        if !replaceArtwork {
+            managedTypes.remove(.coverArt)
+        }
+
+        let mergedItemList: Data
+        if let itemList = children.first(where: { $0.type == .ilst }) {
+            let existingItems = try parseAtoms(in: userDataPayload, range: itemList.payloadRange)
+            var itemListPayload = Data()
+            for item in existingItems where !managedTypes.contains(item.type) {
+                itemListPayload.append(userDataPayload.subdata(in: item.fullRange))
+            }
+            for item in metadataItems {
+                itemListPayload.append(item)
+            }
+            mergedItemList = try makeAtom(type: .ilst, payload: itemListPayload)
+        } else {
+            var itemListPayload = Data()
+            for item in metadataItems {
+                itemListPayload.append(item)
+            }
+            mergedItemList = try makeAtom(type: .ilst, payload: itemListPayload)
+        }
+
+        var updatedChildren = userDataPayload.subdata(in: childrenRange)
+        if let itemList = children.first(where: { $0.type == .ilst }) {
+            let relativeRange = (itemList.fullRange.lowerBound - childrenRange.lowerBound)..<(itemList.fullRange.upperBound - childrenRange.lowerBound)
+            updatedChildren = replacing(relativeRange, in: updatedChildren, with: mergedItemList)
+        } else {
+            updatedChildren.append(mergedItemList)
+        }
+
+        var payload = userDataPayload.subdata(in: flagsRange)
+        payload.append(updatedChildren)
+        return try makeAtom(type: .meta, payload: payload)
     }
 
     private func makeMetadataAtom(with metadataItems: [Data]) throws -> Data {
@@ -497,9 +701,8 @@ struct MP4AtomMetadataWriter: Sendable {
 
         appendTextAtom(.name, value: result.trackName, to: &atoms)
 
-        let synopsis = result.synopsis.trimmingCharacters(in: .whitespacesAndNewlines)
-        appendTextAtom(.description, value: synopsis, to: &atoms)
-        appendTextAtom(.longDescription, value: synopsis, to: &atoms)
+        appendTextAtom(.description, value: result.persistableSynopsis, to: &atoms)
+        appendTextAtom(.longDescription, value: result.persistableSynopsis, to: &atoms)
 
         appendTextAtom(.genre, value: result.primaryGenreName, to: &atoms)
         appendTextAtom(.releaseDate, value: result.releaseDate ?? result.releaseYear, to: &atoms)
@@ -616,6 +819,20 @@ struct MP4AtomMetadataWriter: Sendable {
             lines.append("Rating: \(rating)")
         }
 
+        if let communityRating = result.communityRating {
+            lines.append("Community Rating: \(String(format: "%.1f", communityRating))")
+        }
+
+        if let imdb = result.externalIDs.imdb?.trimmedNilIfBlank {
+            lines.append("IMDb: \(imdb)")
+        }
+        if let tmdb = result.externalIDs.tmdb {
+            lines.append("TMDb: \(tmdb)")
+        }
+        if let tvmaze = result.externalIDs.tvmaze {
+            lines.append("TVMaze: \(tvmaze)")
+        }
+
         lines.append("Tagged by MetaFetch from \(result.sourceName)")
 
         return lines.joined(separator: "\n")
@@ -714,11 +931,14 @@ struct MP4AtomMetadataWriter: Sendable {
     }
 
     private func expectedIntegerRequirements(for result: MediaSearchResult) -> [IntegerRequirement] {
-        var requirements: [IntegerRequirement] = []
+        var requirements = [
+            IntegerRequirement(
+                value: result.mediaKind == .movie ? 9 : 10,
+                types: [.mediaKind]
+            ),
+        ]
 
         if result.mediaKind == .tvEpisode {
-            requirements.append(IntegerRequirement(value: 10, types: [.mediaKind]))
-
             if let seasonNumber = result.seasonNumber {
                 requirements.append(IntegerRequirement(value: seasonNumber, types: [.tvSeason]))
             }
@@ -1204,6 +1424,36 @@ private struct MP4AtomType: Hashable, Sendable {
 
     var isContainer: Bool {
         Self.containerTypes.contains(self)
+    }
+
+    var displayName: String {
+        let knownName: String? = switch self {
+        case .name: "©nam (Title)"
+        case .album: "©alb (Album)"
+        case .albumArtist: "aART (Album Artist)"
+        case .artist: "©ART (Artist)"
+        case .comment: "©cmt (Comment)"
+        case .coverArt: "covr (Artwork)"
+        case .description: "desc (Description)"
+        case .episodeId: "tven (Episode ID)"
+        case .genre: "©gen (Genre)"
+        case .longDescription: "ldes (Long Description)"
+        case .mediaKind: "stik (Media Kind)"
+        case .releaseDate: "©day (Release Date)"
+        case .sortAlbum: "soal (Sort Album)"
+        case .sortName: "sonm (Sort Name)"
+        case .sortShow: "sosn (Sort Show)"
+        case .trackNumber: "trkn (Track Number)"
+        case .tvEpisode: "tves (TV Episode)"
+        case .tvSeason: "tvsn (TV Season)"
+        case .tvShow: "tvsh (TV Show)"
+        default: nil
+        }
+        if let knownName { return knownName }
+        return bytes.map { byte -> String in
+            if (32...126).contains(byte) { return String(UnicodeScalar(byte)) }
+            return String(format: "\\x%02X", byte)
+        }.joined()
     }
 
     private static let containerTypes: Set<MP4AtomType> = [

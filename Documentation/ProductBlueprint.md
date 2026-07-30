@@ -31,13 +31,14 @@ The first screen is the working app experience: choose `Movie` or `TV Show`, the
 5. If the provider does not have the requested episode code, use the trailing episode title as a fallback and explain when the provider lists it under a rebranded show or different season.
 6. For multiple files from one show, use the batch workspace to search the show once, apply it across detected episodes, review each episode, choose cover behavior, and save all ready files.
 7. Import season folders when there are many episodes to queue.
-8. Block accidental series-only saves for episode files unless the user explicitly confirms that choice.
+8. Reconcile a chosen season against the provider catalog, export a read-only CSV/JSON plan when review or handoff is useful, and apply only unambiguous one-to-one matches.
+9. Block accidental series-only saves for episode files unless the user explicitly confirms that choice.
 
 ### Updates And Help
 
 1. Use in-app help for workflow guidance, save behavior, and troubleshooting.
-2. Use the update checker to compare against GitHub Releases.
-3. Download installable release assets to Downloads and reveal them in Finder, keeping installation user-confirmed.
+2. Use signed Sparkle appcast updates in configured production builds.
+3. Fall back to checksum/signature-verified GitHub Releases and a user-confirmed Finder handoff when Sparkle is not configured.
 
 ## Key Screens
 
@@ -51,7 +52,7 @@ The first screen is the working app experience: choose `Movie` or `TV Show`, the
 - TV batch workspace: A split layout with episode list on the left and shared search/review tools on the right.
 - TV batch tabs: `Series`, `Seasons`, `Data`, and `Cover` for shared-show selection, episode review, metadata inspection, and artwork choices.
 - Provider settings sheet: Optional TMDb and OMDb movie provider keys with clear enabled/disabled status.
-- Advanced preferences sheet: Power controls for poster defaults, provider priority, safety backups, TV batch auto-apply, watch folders, and rename-after-save templates.
+- Advanced preferences sheet: Profiles, confidence rules, extras behavior, poster/headroom defaults, provider priority, recovery, custom rename presets, watch folders, diagnostics, and signed update status.
 - Save report actions: Retry failed saves, retry failures without posters, and export reports.
 - Help sheet: A concise in-app guide for workflows, shortcuts, save speed, updates, and troubleshooting.
 - Update sheet: Release check status, newer-version details, download progress, and failure states.
@@ -65,10 +66,12 @@ The first screen is the working app experience: choose `Movie` or `TV Show`, the
 - `MediaSearchResult`: A normalized metadata result from Wikipedia/Wikimedia, optional TMDb/OMDb, or TVMaze, including title, description, media kind, artwork URL, source URL, match quality, sort fields, and episode fields.
 - `TVBatchTab`: The batch workspace sections used to keep multi-episode tagging reviewable.
 - `MovieSearchService`: Network metadata lookups, provider-specific parsing, ranking, and result normalization.
+- `MetadataNetworkSupport`: Bounded JSON streaming plus coalesced, expiring TVMaze response caching for season-sized imports.
 - `ArtworkPipeline`: Bounded artwork fetch, MIME and host validation, downsampling, caching, and eviction.
-- `MP4MetadataWriter`: Native MP4 atom write path, verification, and fallback container rewrite behavior.
+- `MP4MetadataWriter`: Native MP4 atom write path, full requested-field verification, and fallback container rewrite behavior.
 - `MP4CurrentMetadataReader`: Reads existing MP4 metadata atoms for true current-tags versus final-tags preview.
-- `UpdateService`: GitHub Releases version comparison, bounded asset download, and reveal-in-Finder install handoff.
+- `TransactionalFileReplacement`: Destination-volume staging, coordinated atomic replacement, and temporary rollback for verified container commits, including files on external volumes.
+- `UpdateService`: GitHub Releases version comparison, bounded asset download, SHA-256 and DMG signature verification, and reveal-in-Finder install handoff.
 - `MetadataDraft`: Editable per-file metadata applied over the selected provider result before writing.
 - `ProviderHealthHistory`: Local searched/skipped/failed provider counters for troubleshooting.
 - `TaggingHistoryStore`: Short local list of recently verified saves.
@@ -77,6 +80,11 @@ The first screen is the working app experience: choose `Movie` or `TV Show`, the
 - `MetadataProviderPreferences`: Local Keychain-backed provider key preferences used to enable optional TMDb and OMDb movie search without bundling secrets.
 - `FileQueueFilter`: Sidebar and TV batch filtering for exact matches, review states, series-only rows, saved rows, failures, and poster availability.
 - `MetadataProviderSource`: Provider preference for ranking movie results without hiding alternate sources.
+- `MetadataInterchange`: Size-bounded JSON/NFO import and export with external XML entity resolution disabled.
+- `SeasonReconciler`: Full-season matching that isolates missing, duplicate, and unknown episode rows and exports explicit planned actions without full filesystem paths.
+- `RecoveryCenterService`: Verified transactional restore for discoverable safety and rollback copies.
+- `SecurityScopedAccessManager`: Retains user-selected file access and persists the watch folder as an app-scoped bookmark.
+- `SignedUpdateCoordinator`: Sparkle controller enabled only by an HTTPS feed and EdDSA public key in the signed app bundle.
 
 ## Important Edge Cases
 
@@ -88,8 +96,8 @@ The first screen is the working app experience: choose `Movie` or `TV Show`, the
 - TV filenames can omit show names, use folder context, include specials, have malformed episode codes, or refer to episodes that TVMaze lists under a rebranded show or different season.
 - Artwork can be absent, oversized, redirected to an unexpected host, invalid image data, or slow to download.
 - MP4 files can have no metadata headroom, oversized `moov` atoms, unusual atom nesting, or layouts that require a full container rewrite.
-- Save operations can be cancelled, interrupted, fail verification, or leave the user unsure whether tags persisted unless the app reads back after writing.
-- Update releases can have no installable asset, oversized downloads, invalid URLs, or versions that compare differently with and without a leading `v`.
+- Save operations can be cancelled, interrupted, fail verification, or damage prior metadata unless writes preserve unknown atoms and roll back before reporting failure.
+- The repository can have no published Releases; update releases can also have no installable asset, missing or mismatched checksum sidecars, invalid signatures, oversized downloads, invalid URLs, or versions that compare differently with and without a leading `v`.
 - Rename-after-save templates can collide with existing filenames or produce unsafe names; MetaFetch sanitizes names and adds suffixes.
 - Watch folders can contain duplicates or unsupported files; MetaFetch imports only new validated MP4 files and leaves duplicates alone.
 
@@ -112,5 +120,5 @@ The first screen is the working app experience: choose `Movie` or `TV Show`, the
 ## Future Product Enhancements
 
 - Expand current-tag reading to additional niche third-party MP4/iTunes atoms.
-- Add rename preset management for reusable library naming styles.
-- Replace the lightweight GitHub updater with a signed Sparkle appcast if fully automatic updates become a product requirement.
+- Add chapter-marker editing and chapter artwork after a dedicated MP4 chapter safety review.
+- Add provider conflict comparison so a user can merge the best fields from multiple sources.

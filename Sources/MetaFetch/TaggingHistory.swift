@@ -82,10 +82,7 @@ enum TaggingHistoryStore {
                 record.filePath,
             ]
         }
-        let csv = ([header] + rows)
-            .map { $0.map(csvEscaped).joined(separator: ",") }
-            .joined(separator: "\n")
-        return Data((csv + "\n").utf8)
+        return CSVEncoding.data(rows: [header] + rows)
     }
 
     private static func loadRecords() -> [TaggingHistoryRecord] {
@@ -105,9 +102,4 @@ enum TaggingHistoryStore {
         UserDefaults.standard.set(data, forKey: storageKey)
     }
 
-    private static func csvEscaped(_ value: String) -> String {
-        let needsQuotes = value.contains(",") || value.contains("\"") || value.contains("\n")
-        let escaped = value.replacingOccurrences(of: "\"", with: "\"\"")
-        return needsQuotes ? "\"\(escaped)\"" : escaped
-    }
 }

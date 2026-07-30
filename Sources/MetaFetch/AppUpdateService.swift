@@ -1,9 +1,12 @@
+import CryptoKit
 import Foundation
+import Security
 
 struct AppUpdate: Identifiable {
     struct Asset {
         let name: String
         let downloadURL: URL
+        let checksumURL: URL?
         let size: Int
         let contentType: String?
     }
@@ -19,6 +22,7 @@ struct AppUpdate: Identifiable {
 }
 
 enum AppUpdateCheckResult {
+    case noPublishedRelease
     case upToDate(version: String)
     case available(AppUpdate)
 }
@@ -26,6 +30,7 @@ enum AppUpdateCheckResult {
 enum AppUpdateState {
     case idle
     case checking
+    case noPublishedRelease
     case upToDate(version: String)
     case available(AppUpdate)
     case downloading(AppUpdate)
@@ -36,7 +41,7 @@ enum AppUpdateState {
         switch self {
         case .checking, .downloading:
             return true
-        case .idle, .upToDate, .available, .downloaded, .failed:
+        case .idle, .noPublishedRelease, .upToDate, .available, .downloaded, .failed:
             return false
         }
     }
@@ -50,6 +55,7 @@ protocol AppUpdateChecking: Sendable {
 struct GitHubReleaseUpdateService: AppUpdateChecking {
     enum UpdateError: LocalizedError {
         case invalidReleaseURL
+        case invalidReleaseResponse
         case invalidDownloadURL
         case serverResponse(Int)
         case responseTooLarge
@@ -57,12 +63,17 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
         case assetTooLarge(Int)
         case downloadsFolderUnavailable
         case downloadedAssetInvalid
+        case checksumUnavailable
+        case checksumInvalid
+        case codeSignatureInvalid
         case moveFailed
 
         var errorDescription: String? {
             switch self {
             case .invalidReleaseURL:
                 return "MetaFetch could not build the GitHub release URL."
+            case .invalidReleaseResponse:
+                return "GitHub returned an invalid response while checking for updates."
             case .invalidDownloadURL:
                 return "The GitHub release asset URL was not trusted."
             case .serverResponse(let statusCode):
@@ -77,6 +88,12 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
                 return "MetaFetch could not find your Downloads folder."
             case .downloadedAssetInvalid:
                 return "MetaFetch downloaded the update, but the file did not pass safety checks."
+            case .checksumUnavailable:
+                return "The release does not include the required SHA-256 checksum file."
+            case .checksumInvalid:
+                return "The downloaded update did not match its published SHA-256 checksum."
+            case .codeSignatureInvalid:
+                return "The downloaded update does not have a valid trusted code signature."
             case .moveFailed:
                 return "MetaFetch downloaded the update but could not move it to Downloads."
             }
@@ -86,7 +103,21 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
     private let owner = "jaysonguglietta"
     private let repository = "MetaFetch"
     private let maximumReleaseResponseBytes = 1_000_000
+    private let maximumRepositoryResponseBytes = 256_000
     private let maximumDownloadBytes = 350_000_000
+    private let dataLoader: @Sendable (URLRequest, Int) async throws -> (Data, URLResponse)
+
+    static var releasesPageURL: URL? {
+        URL(string: "https://github.com/jaysonguglietta/MetaFetch/releases")
+    }
+
+    init(
+        dataLoader: (@Sendable (URLRequest, Int) async throws -> (Data, URLResponse))? = nil
+    ) {
+        self.dataLoader = dataLoader ?? { request, maximumBytes in
+            try await Self.boundedData(for: request, maximumBytes: maximumBytes)
+        }
+    }
 
     func checkForUpdate(currentVersion: String) async throws -> AppUpdateCheckResult {
         guard let url = URL(string: "https://api.github.com/repos/\(owner)/\(repository)/releases/latest") else {
@@ -94,13 +125,14 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
         }
 
         var request = URLRequest(url: url, timeoutInterval: 15)
-        request.setValue("MetaFetch/1.1", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppBuildInfo.shortUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
 
-        let (data, response) = try await Self.boundedData(
-            for: request,
-            maximumBytes: maximumReleaseResponseBytes
-        )
+        let (data, response) = try await dataLoader(request, maximumReleaseResponseBytes)
+        let statusCode = try githubAPIStatusCode(for: response)
+        if statusCode == 404 {
+            return try await confirmEmptyReleaseChannel()
+        }
         try validate(response: response)
 
         let decoder = JSONDecoder()
@@ -126,6 +158,21 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
         return .available(update)
     }
 
+    private func confirmEmptyReleaseChannel() async throws -> AppUpdateCheckResult {
+        guard let url = URL(string: "https://api.github.com/repos/\(owner)/\(repository)") else {
+            throw UpdateError.invalidReleaseURL
+        }
+
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        request.setValue(AppBuildInfo.shortUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+
+        let (_, response) = try await dataLoader(request, maximumRepositoryResponseBytes)
+        _ = try githubAPIStatusCode(for: response)
+        try validate(response: response)
+        return .noPublishedRelease
+    }
+
     func download(update: AppUpdate) async throws -> URL {
         guard let asset = update.asset else {
             throw UpdateError.noInstallableAsset
@@ -135,16 +182,28 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
             throw UpdateError.invalidDownloadURL
         }
 
+        guard let checksumURL = asset.checksumURL else {
+            throw UpdateError.checksumUnavailable
+        }
+        guard Self.isTrustedReleaseURL(checksumURL) else {
+            throw UpdateError.invalidDownloadURL
+        }
+
         guard asset.size > 0,
               asset.size <= maximumDownloadBytes else {
             throw UpdateError.assetTooLarge(asset.size)
         }
 
         var request = URLRequest(url: asset.downloadURL, timeoutInterval: 120)
-        request.setValue("MetaFetch/1.1", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppBuildInfo.shortUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
 
-        let (temporaryURL, response) = try await URLSession.shared.download(for: request)
+        let expectedChecksum = try await checksum(from: checksumURL)
+
+        let (temporaryURL, response) = try await BoundedAssetDownloader.download(
+            request: request,
+            maximumBytes: Int64(maximumDownloadBytes)
+        )
         var shouldRemoveTemporaryFile = true
         defer {
             if shouldRemoveTemporaryFile {
@@ -158,6 +217,8 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
             response: response,
             declaredSize: asset.size
         )
+        try verifySHA256(of: temporaryURL, expected: expectedChecksum)
+        try validateCodeSignatureIfApplicable(at: temporaryURL, assetName: asset.name)
 
         let downloadsURL = try downloadsFolder()
         let destinationURL = uniqueDestinationURL(
@@ -183,6 +244,17 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
         guard (200..<300).contains(httpResponse.statusCode) else {
             throw UpdateError.serverResponse(httpResponse.statusCode)
         }
+    }
+
+    private func githubAPIStatusCode(for response: URLResponse) throws -> Int {
+        guard let responseURL = response.url,
+              responseURL.scheme?.lowercased() == "https",
+              responseURL.host?.lowercased() == "api.github.com",
+              let httpResponse = response as? HTTPURLResponse else {
+            throw UpdateError.invalidReleaseResponse
+        }
+
+        return httpResponse.statusCode
     }
 
     private func validateDownloadedAsset(
@@ -220,6 +292,13 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
     }
 
     private func preferredAsset(from assets: [GitHubRelease.Asset]) -> AppUpdate.Asset? {
+        let checksumURLsByName: [String: URL] = Dictionary(uniqueKeysWithValues: assets.compactMap { asset -> (String, URL)? in
+            guard asset.name.lowercased().hasSuffix(".sha256"),
+                  let url = asset.browserDownloadURL else {
+                return nil
+            }
+            return (asset.name.lowercased(), url)
+        })
         let installableAssets = assets.compactMap { asset -> AppUpdate.Asset? in
             guard let downloadURL = asset.browserDownloadURL,
                   let fileExtension = asset.name.split(separator: ".").last?.lowercased(),
@@ -230,6 +309,7 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
             return AppUpdate.Asset(
                 name: asset.name,
                 downloadURL: downloadURL,
+                checksumURL: checksumURLsByName["\(asset.name.lowercased()).sha256"],
                 size: asset.size,
                 contentType: asset.contentType
             )
@@ -242,6 +322,86 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
             return lhsPriority < rhsPriority
         }
         .first
+    }
+
+    private func checksum(from url: URL) async throws -> String {
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        request.setValue(AppBuildInfo.shortUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("text/plain", forHTTPHeaderField: "Accept")
+        let (data, response) = try await dataLoader(request, 16 * 1024)
+        try validate(response: response)
+
+        if let finalURL = response.url,
+           !Self.isTrustedDownloadResponseURL(finalURL) {
+            throw UpdateError.invalidDownloadURL
+        }
+
+        guard let text = String(data: data, encoding: .utf8),
+              let checksum = text
+                .split(whereSeparator: \.isWhitespace)
+                .map(String.init)
+                .first(where: { $0.range(of: #"^[A-Fa-f0-9]{64}$"#, options: .regularExpression) != nil }) else {
+            throw UpdateError.checksumInvalid
+        }
+        return checksum.lowercased()
+    }
+
+    private func verifySHA256(of fileURL: URL, expected: String) throws {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer {
+            try? handle.close()
+        }
+
+        var hasher = SHA256()
+        while true {
+            let data = handle.readData(ofLength: 4 * 1024 * 1024)
+            if data.isEmpty {
+                break
+            }
+            hasher.update(data: data)
+        }
+
+        let actual = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        guard actual == expected else {
+            throw UpdateError.checksumInvalid
+        }
+    }
+
+    private func validateCodeSignatureIfApplicable(at fileURL: URL, assetName: String) throws {
+        guard assetName.pathExtensionLowercased == "dmg" else {
+            return
+        }
+
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(fileURL as CFURL, [], &staticCode) == errSecSuccess,
+              let staticCode,
+              SecStaticCodeCheckValidity(
+                staticCode,
+                SecCSFlags(rawValue: kSecCSStrictValidate),
+                nil
+              ) == errSecSuccess else {
+            throw UpdateError.codeSignatureInvalid
+        }
+
+        if let currentTeamID = signingTeamIdentifier(for: Bundle.main.bundleURL),
+           signingTeamIdentifier(for: fileURL) != currentTeamID {
+            throw UpdateError.codeSignatureInvalid
+        }
+    }
+
+    private func signingTeamIdentifier(for url: URL) -> String? {
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess,
+              let staticCode else {
+            return nil
+        }
+
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(staticCode, [], &information) == errSecSuccess,
+              let dictionary = information as? [String: Any] else {
+            return nil
+        }
+        return dictionary[kSecCodeInfoTeamIdentifier as String] as? String
     }
 
     private func downloadsFolder() throws -> URL {
@@ -353,6 +513,137 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         return sanitizedName.isEmpty ? "MetaFetch-update.dmg" : sanitizedName
+    }
+}
+
+private final class BoundedAssetDownloader: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let maximumBytes: Int64
+    private let stagingURL: URL
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<(URL, URLResponse), Error>?
+    private var session: URLSession?
+    private var task: URLSessionDownloadTask?
+    private var exceededByteCount: Int64?
+    private var didFinish = false
+
+    private init(maximumBytes: Int64) {
+        self.maximumBytes = maximumBytes
+        stagingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("metafetch-update-\(UUID().uuidString)")
+        super.init()
+    }
+
+    static func download(
+        request: URLRequest,
+        maximumBytes: Int64
+    ) async throws -> (URL, URLResponse) {
+        let downloader = BoundedAssetDownloader(maximumBytes: maximumBytes)
+        return try await downloader.start(request: request)
+    }
+
+    private func start(request: URLRequest) async throws -> (URL, URLResponse) {
+        try Task.checkCancellation()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                lock.lock()
+                self.continuation = continuation
+                let configuration = URLSessionConfiguration.ephemeral
+                configuration.timeoutIntervalForRequest = request.timeoutInterval
+                let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+                self.session = session
+                let task = session.downloadTask(with: request)
+                self.task = task
+                lock.unlock()
+                task.resume()
+            }
+        } onCancel: {
+            self.cancel()
+        }
+    }
+
+    private func cancel() {
+        lock.lock()
+        let task = task
+        lock.unlock()
+        task?.cancel()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        guard totalBytesWritten > maximumBytes || totalBytesExpectedToWrite > maximumBytes else {
+            return
+        }
+
+        lock.lock()
+        exceededByteCount = max(totalBytesWritten, totalBytesExpectedToWrite)
+        lock.unlock()
+        downloadTask.cancel()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        do {
+            guard let response = downloadTask.response else {
+                throw GitHubReleaseUpdateService.UpdateError.downloadedAssetInvalid
+            }
+            let attributes = try FileManager.default.attributesOfItem(atPath: location.path)
+            guard let size = attributes[.size] as? NSNumber else {
+                throw GitHubReleaseUpdateService.UpdateError.downloadedAssetInvalid
+            }
+            guard size.int64Value <= maximumBytes else {
+                throw GitHubReleaseUpdateService.UpdateError.assetTooLarge(size.intValue)
+            }
+
+            try FileManager.default.moveItem(at: location, to: stagingURL)
+            finish(with: .success((stagingURL, response)))
+        } catch {
+            finish(with: .failure(error))
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        guard let error else {
+            return
+        }
+
+        lock.lock()
+        let exceededByteCount = exceededByteCount
+        lock.unlock()
+        if let exceededByteCount {
+            let reportedSize = Int(min(exceededByteCount, Int64(Int.max)))
+            finish(with: .failure(GitHubReleaseUpdateService.UpdateError.assetTooLarge(reportedSize)))
+        } else {
+            finish(with: .failure(error))
+        }
+    }
+
+    private func finish(with result: Result<(URL, URLResponse), Error>) {
+        lock.lock()
+        guard !didFinish, let continuation else {
+            lock.unlock()
+            return
+        }
+        didFinish = true
+        self.continuation = nil
+        let session = session
+        self.session = nil
+        task = nil
+        lock.unlock()
+
+        continuation.resume(with: result)
+        session?.finishTasksAndInvalidate()
     }
 }
 
