@@ -53,7 +53,7 @@ Converted MP4 files often have poor or missing metadata. MetaFetch helps users i
 - Saves can fail verification or be interrupted; MetaFetch must restore bounded in-place changes or retain a transactional rollback copy until all requested tags verify.
 - Existing MP4s can contain third-party metadata that must survive MetaFetch-managed tag replacement.
 - Rename templates can collide with existing filenames or generate unsafe names.
-- Update downloads can be missing, oversized, checksum-mismatched, signed by the wrong team, or require user-confirmed installation.
+- The update channel can have no published Releases; downloads can also be missing, oversized, checksum-mismatched, signed by the wrong team, or require user-confirmed installation.
 - App Sandbox permissions can expire or bookmarks can become stale; access must always originate from a user-selected file or folder.
 
 ## Assumptions

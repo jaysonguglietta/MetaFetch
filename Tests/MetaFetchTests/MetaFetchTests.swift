@@ -1226,6 +1226,77 @@ final class MetaFetchTests: XCTestCase {
         XCTAssertEqual(rows.last?["willApply"] as? Bool, false)
     }
 
+    func testUpdateCheckTreatsLatestRelease404AsNoPublishedRelease() async throws {
+        let service = GitHubReleaseUpdateService { request, _ in
+            let statusCode = request.url?.path.hasSuffix("/releases/latest") == true ? 404 : 200
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: statusCode,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: nil
+                )
+            )
+            return (Data(), response)
+        }
+
+        let result = try await service.checkForUpdate(currentVersion: "2.02")
+        guard case .noPublishedRelease = result else {
+            return XCTFail("Expected an empty GitHub release channel, got \(result)")
+        }
+    }
+
+    func testUpdateCheckDoesNotHideMissingRepositoryAsEmptyReleaseChannel() async throws {
+        let service = GitHubReleaseUpdateService { request, _ in
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 404,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: nil
+                )
+            )
+            return (Data(), response)
+        }
+
+        do {
+            _ = try await service.checkForUpdate(currentVersion: "2.02")
+            XCTFail("Expected a missing repository to remain an update failure.")
+        } catch let error as GitHubReleaseUpdateService.UpdateError {
+            guard case .serverResponse(404) = error else {
+                return XCTFail("Expected repository HTTP 404, got \(error)")
+            }
+        }
+    }
+
+    func testUpdateCheckStillRejectsOtherHTTPFailures() async throws {
+        let service = GitHubReleaseUpdateService { request, _ in
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 403,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: nil
+                )
+            )
+            return (Data(), response)
+        }
+
+        do {
+            _ = try await service.checkForUpdate(currentVersion: "2.02")
+            XCTFail("Expected HTTP 403 to remain an update failure.")
+        } catch let error as GitHubReleaseUpdateService.UpdateError {
+            guard case .serverResponse(403) = error else {
+                return XCTFail("Expected HTTP 403, got \(error)")
+            }
+        }
+    }
+
+    func testAppBuildInfoMatchesCurrentReleaseDefaults() {
+        XCTAssertEqual(AppBuildInfo.fallbackVersion, "2.02")
+        XCTAssertEqual(AppBuildInfo.shortUserAgent, "MetaFetch/\(AppBuildInfo.version)")
+    }
+
     @MainActor
     func testDiagnosticsOmitFilenamesAndPaths() throws {
         let sensitivePath = "/Users/example/Private/Embarrassing.Movie.2026.mp4"

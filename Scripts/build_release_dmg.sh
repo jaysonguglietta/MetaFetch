@@ -4,8 +4,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="MetaFetch"
-APP_VERSION="${APP_VERSION:-2.01}"
-APP_BUILD="${APP_BUILD:-4}"
+APP_VERSION="${APP_VERSION:-2.02}"
+APP_BUILD="${APP_BUILD:-5}"
 APP_SIGN_IDENTITY="${APP_SIGN_IDENTITY:--}"
 APP_NOTARY_PROFILE="${APP_NOTARY_PROFILE:-}"
 RELEASE_DIR="$ROOT_DIR/dist/release"

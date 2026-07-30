@@ -97,7 +97,7 @@ The first screen is the working app experience: choose `Movie` or `TV Show`, the
 - Artwork can be absent, oversized, redirected to an unexpected host, invalid image data, or slow to download.
 - MP4 files can have no metadata headroom, oversized `moov` atoms, unusual atom nesting, or layouts that require a full container rewrite.
 - Save operations can be cancelled, interrupted, fail verification, or damage prior metadata unless writes preserve unknown atoms and roll back before reporting failure.
-- Update releases can have no installable asset, missing or mismatched checksum sidecars, invalid signatures, oversized downloads, invalid URLs, or versions that compare differently with and without a leading `v`.
+- The repository can have no published Releases; update releases can also have no installable asset, missing or mismatched checksum sidecars, invalid signatures, oversized downloads, invalid URLs, or versions that compare differently with and without a leading `v`.
 - Rename-after-save templates can collide with existing filenames or produce unsafe names; MetaFetch sanitizes names and adds suffixes.
 - Watch folders can contain duplicates or unsupported files; MetaFetch imports only new validated MP4 files and leaves duplicates alone.
 

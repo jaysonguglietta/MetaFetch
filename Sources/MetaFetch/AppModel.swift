@@ -313,7 +313,7 @@ final class AppModel: ObservableObject {
     }
 
     var currentAppVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.01"
+        AppBuildInfo.version
     }
 
     func chooseMode(_ mode: MediaLibraryMode) {
@@ -1098,6 +1098,8 @@ final class AppModel: ObservableObject {
 
         do {
             switch try await updateService.checkForUpdate(currentVersion: currentAppVersion) {
+            case .noPublishedRelease:
+                updateState = .noPublishedRelease
             case .upToDate(let version):
                 updateState = .upToDate(version: version)
             case .available(let update):
@@ -1127,6 +1129,13 @@ final class AppModel: ObservableObject {
 
     func openReleasePage(for update: AppUpdate) {
         NSWorkspace.shared.open(update.releaseURL)
+    }
+
+    func openReleasesPage() {
+        guard let url = GitHubReleaseUpdateService.releasesPageURL else {
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 
     func revealDownloadedUpdate(at fileURL: URL) {

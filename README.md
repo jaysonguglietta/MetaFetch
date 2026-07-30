@@ -102,7 +102,7 @@ The build fails unless Sparkle is embedded, the executable contains the correct 
 Build with release version metadata:
 
 ```bash
-APP_VERSION=2.01 APP_BUILD=4 ./Scripts/build_app.sh
+APP_VERSION=2.02 APP_BUILD=5 ./Scripts/build_app.sh
 ```
 
 The local build script ad-hoc signs the app for development. Because ad-hoc code has no stable Team ID, local builds do not enable hardened runtime. Distribution builds require a Developer ID Application identity and retain hardened runtime plus library validation:
@@ -130,23 +130,35 @@ APP_NOTARY_PROFILE="metafetch-notary" \
 ./Scripts/build_release_dmg.sh
 ```
 
-`APP_NOTARY_PROFILE` should be an `xcrun notarytool` keychain profile. Omit it for local unsigned/not-notarized test DMGs.
+`APP_NOTARY_PROFILE` should be an `xcrun notarytool` keychain profile. Omit it only for local test DMGs; unsigned or unnotarized artifacts must not be published.
+
+After merging the intended release commit to `main`, publish a production release with the guarded workflow:
+
+```bash
+APP_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+APP_NOTARY_PROFILE="metafetch-notary" \
+./Scripts/publish_release.sh
+```
+
+The publisher requires a clean `main` exactly matching `origin/main`, a matching release-notes file, an authenticated GitHub CLI session, an available Developer ID Application identity, and a working notarization profile. It builds, signs, notarizes, staples, Gatekeeper-assesses, checksum-verifies, and only then publishes the DMG and its sidecar. It fails closed when any prerequisite is missing.
 
 ## Updates
 
 Production builds can use Sparkle 2.9.4 with an HTTPS appcast and EdDSA public key embedded at build time. Sparkle verifies the signed appcast and release archive before installation. The feed URL and public key are release configuration, not source-controlled secrets.
 
-MetaFetch checks `jaysonguglietta/MetaFetch` GitHub Releases. A release is considered newer when its tag, such as `v2.01` or `2.01`, is greater than the app’s `CFBundleShortVersionString`.
+MetaFetch checks `jaysonguglietta/MetaFetch` GitHub Releases. A release is considered newer when its tag, such as `v2.02` or `2.02`, is greater than the app’s `CFBundleShortVersionString`.
+
+GitHub returns `404` from its latest-release endpoint when a public repository has no published Releases. MetaFetch confirms that the repository itself is reachable, then treats that response as an empty release channel and explains that no downloadable version is available. Missing repositories and other HTTP failures remain errors.
 
 For in-app downloads, attach an installable asset and its exact-name SHA-256 sidecar to the GitHub release:
 
-- `MetaFetch-2.01.dmg` and `MetaFetch-2.01.dmg.sha256`
-- `MetaFetch-2.01.zip` and `MetaFetch-2.01.zip.sha256`
-- `MetaFetch-2.01.pkg` and `MetaFetch-2.01.pkg.sha256`
+- `MetaFetch-2.02.dmg` and `MetaFetch-2.02.dmg.sha256`
+- `MetaFetch-2.02.zip` and `MetaFetch-2.02.zip.sha256`
+- `MetaFetch-2.02.pkg` and `MetaFetch-2.02.pkg.sha256`
 
 MetaFetch verifies the downloaded bytes against the sidecar before moving the asset to the user’s Downloads folder. DMG downloads must also have a valid macOS code signature; when the installed app has a Developer ID Team ID, the DMG must use the same team. MetaFetch then reveals the asset in Finder without opening it, so the final app replacement remains visible and user-confirmed instead of silently replacing a running app.
 
-For production releases, sign and notarize installer assets before attaching them to GitHub. `Scripts/build_release_dmg.sh` creates a DMG and SHA-256 file for that workflow. The in-app updater intentionally treats GitHub release downloads as manual installs rather than silently trusted code.
+For production releases, use `Scripts/publish_release.sh`; it refuses to publish until the installer has passed the complete signing, notarization, stapling, Gatekeeper, and checksum workflow. `Scripts/build_release_dmg.sh` remains available for local artifact creation. The in-app updater intentionally treats GitHub release downloads as manual installs rather than silently trusted code.
 
 ## Security Hardening
 

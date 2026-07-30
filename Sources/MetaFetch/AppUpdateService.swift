@@ -22,6 +22,7 @@ struct AppUpdate: Identifiable {
 }
 
 enum AppUpdateCheckResult {
+    case noPublishedRelease
     case upToDate(version: String)
     case available(AppUpdate)
 }
@@ -29,6 +30,7 @@ enum AppUpdateCheckResult {
 enum AppUpdateState {
     case idle
     case checking
+    case noPublishedRelease
     case upToDate(version: String)
     case available(AppUpdate)
     case downloading(AppUpdate)
@@ -39,7 +41,7 @@ enum AppUpdateState {
         switch self {
         case .checking, .downloading:
             return true
-        case .idle, .upToDate, .available, .downloaded, .failed:
+        case .idle, .noPublishedRelease, .upToDate, .available, .downloaded, .failed:
             return false
         }
     }
@@ -53,6 +55,7 @@ protocol AppUpdateChecking: Sendable {
 struct GitHubReleaseUpdateService: AppUpdateChecking {
     enum UpdateError: LocalizedError {
         case invalidReleaseURL
+        case invalidReleaseResponse
         case invalidDownloadURL
         case serverResponse(Int)
         case responseTooLarge
@@ -69,6 +72,8 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
             switch self {
             case .invalidReleaseURL:
                 return "MetaFetch could not build the GitHub release URL."
+            case .invalidReleaseResponse:
+                return "GitHub returned an invalid response while checking for updates."
             case .invalidDownloadURL:
                 return "The GitHub release asset URL was not trusted."
             case .serverResponse(let statusCode):
@@ -98,7 +103,21 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
     private let owner = "jaysonguglietta"
     private let repository = "MetaFetch"
     private let maximumReleaseResponseBytes = 1_000_000
+    private let maximumRepositoryResponseBytes = 256_000
     private let maximumDownloadBytes = 350_000_000
+    private let dataLoader: @Sendable (URLRequest, Int) async throws -> (Data, URLResponse)
+
+    static var releasesPageURL: URL? {
+        URL(string: "https://github.com/jaysonguglietta/MetaFetch/releases")
+    }
+
+    init(
+        dataLoader: (@Sendable (URLRequest, Int) async throws -> (Data, URLResponse))? = nil
+    ) {
+        self.dataLoader = dataLoader ?? { request, maximumBytes in
+            try await Self.boundedData(for: request, maximumBytes: maximumBytes)
+        }
+    }
 
     func checkForUpdate(currentVersion: String) async throws -> AppUpdateCheckResult {
         guard let url = URL(string: "https://api.github.com/repos/\(owner)/\(repository)/releases/latest") else {
@@ -106,13 +125,14 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
         }
 
         var request = URLRequest(url: url, timeoutInterval: 15)
-        request.setValue("MetaFetch/2.01", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppBuildInfo.shortUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
 
-        let (data, response) = try await Self.boundedData(
-            for: request,
-            maximumBytes: maximumReleaseResponseBytes
-        )
+        let (data, response) = try await dataLoader(request, maximumReleaseResponseBytes)
+        let statusCode = try githubAPIStatusCode(for: response)
+        if statusCode == 404 {
+            return try await confirmEmptyReleaseChannel()
+        }
         try validate(response: response)
 
         let decoder = JSONDecoder()
@@ -138,6 +158,21 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
         return .available(update)
     }
 
+    private func confirmEmptyReleaseChannel() async throws -> AppUpdateCheckResult {
+        guard let url = URL(string: "https://api.github.com/repos/\(owner)/\(repository)") else {
+            throw UpdateError.invalidReleaseURL
+        }
+
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        request.setValue(AppBuildInfo.shortUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+
+        let (_, response) = try await dataLoader(request, maximumRepositoryResponseBytes)
+        _ = try githubAPIStatusCode(for: response)
+        try validate(response: response)
+        return .noPublishedRelease
+    }
+
     func download(update: AppUpdate) async throws -> URL {
         guard let asset = update.asset else {
             throw UpdateError.noInstallableAsset
@@ -160,7 +195,7 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
         }
 
         var request = URLRequest(url: asset.downloadURL, timeoutInterval: 120)
-        request.setValue("MetaFetch/2.01", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppBuildInfo.shortUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
 
         let expectedChecksum = try await checksum(from: checksumURL)
@@ -209,6 +244,17 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
         guard (200..<300).contains(httpResponse.statusCode) else {
             throw UpdateError.serverResponse(httpResponse.statusCode)
         }
+    }
+
+    private func githubAPIStatusCode(for response: URLResponse) throws -> Int {
+        guard let responseURL = response.url,
+              responseURL.scheme?.lowercased() == "https",
+              responseURL.host?.lowercased() == "api.github.com",
+              let httpResponse = response as? HTTPURLResponse else {
+            throw UpdateError.invalidReleaseResponse
+        }
+
+        return httpResponse.statusCode
     }
 
     private func validateDownloadedAsset(
@@ -280,9 +326,9 @@ struct GitHubReleaseUpdateService: AppUpdateChecking {
 
     private func checksum(from url: URL) async throws -> String {
         var request = URLRequest(url: url, timeoutInterval: 15)
-        request.setValue("MetaFetch/2.01", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppBuildInfo.shortUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("text/plain", forHTTPHeaderField: "Accept")
-        let (data, response) = try await Self.boundedData(for: request, maximumBytes: 16 * 1024)
+        let (data, response) = try await dataLoader(request, 16 * 1024)
         try validate(response: response)
 
         if let finalURL = response.url,

@@ -186,7 +186,9 @@ Use the `Help` toolbar button for a quick version of this guide inside MetaFetch
 
 Use `Updates` in the toolbar or `Check for Updates...` from the app menu. A production build configured with a signed Sparkle appcast uses Sparkle for update installation. Other builds use the verified GitHub release workflow below.
 
-MetaFetch compares the installed app version with the latest release tag in `jaysonguglietta/MetaFetch`. Tags like `v2.01` and `2.01` are both understood as version `2.01`.
+MetaFetch compares the installed app version with the latest release tag in `jaysonguglietta/MetaFetch`. Tags like `v2.02` and `2.02` are both understood as version `2.02`.
+
+If the repository has no published Releases, GitHub's latest-release endpoint returns `404`. MetaFetch confirms that the repository itself is still reachable, presents `No Published Release Yet`, keeps the installed version unchanged, and offers a link to the Releases page. A missing repository or other HTTP failure remains an error.
 
 If the newer release includes a `.dmg`, `.zip`, or `.pkg` asset plus a matching `<asset-name>.sha256` file, MetaFetch can download it to your Downloads folder and reveal it in Finder. The app verifies the checksum first. DMG files must also have a valid macOS code signature and, for Developer ID builds, match the installed app's signing team. MetaFetch does not open downloaded installers automatically.
 

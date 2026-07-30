@@ -3201,6 +3201,7 @@ private struct HelpView: View {
                         rows: [
                             "Configured production builds use a signed Sparkle appcast; other builds use the verified GitHub release workflow.",
                             "MetaFetch compares the installed app version with the latest GitHub release tag.",
+                            "If the repository has no published Releases yet, MetaFetch confirms the repository is reachable and reports an empty release channel instead of treating GitHub's 404 response as a network failure.",
                             "A release asset must include an exact-name .sha256 sidecar; MetaFetch verifies the checksum before keeping the download.",
                             "DMG downloads must also pass macOS code-signature validation and match the installed app's Developer ID team when available.",
                             "Installer replacement still stays visible and user-confirmed, and MetaFetch no longer opens downloaded installers automatically.",
@@ -3302,6 +3303,13 @@ private struct UpdateView: View {
 
                     Spacer()
 
+                    if case .noPublishedRelease = model.updateState {
+                        Button("Open Releases Page") {
+                            model.openReleasesPage()
+                        }
+                        .buttonStyle(RetroPrimaryButtonStyle(accent: RetroTheme.gold))
+                    }
+
                     if case .available(let update) = model.updateState {
                         Button(update.asset == nil ? "Open Release Page" : "Download And Reveal") {
                             if update.asset == nil {
@@ -3349,6 +3357,12 @@ private struct UpdateView: View {
                 ProgressView()
                     .progressViewStyle(.linear)
             }
+        case .noPublishedRelease:
+            updateMessage(
+                eyebrow: "Release Channel Empty",
+                title: "No Published Release Yet",
+                message: "The MetaFetch GitHub repository is available, but it does not have a published Release to compare or download yet. Your installed version \(model.currentAppVersion) is unchanged. Open the Releases page for details or try again later."
+            )
         case .upToDate(let version):
             updateMessage(
                 eyebrow: "Current",
@@ -3405,7 +3419,7 @@ private struct UpdateView: View {
             return RetroTheme.magenta
         case .checking, .downloading:
             return RetroTheme.cyan
-        case .idle, .upToDate:
+        case .idle, .noPublishedRelease, .upToDate:
             return RetroTheme.gold
         }
     }

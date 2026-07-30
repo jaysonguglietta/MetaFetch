@@ -519,7 +519,7 @@ private struct TMDbMovieSearchService {
     private func performRequest<Response: Decodable>(_ url: URL, decoding type: Response.Type) async throws -> Response {
         var request = URLRequest(url: url)
         request.timeoutInterval = BoundedJSONRequest.timeoutInterval
-        request.setValue("MetaFetch/2.01", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppBuildInfo.shortUserAgent, forHTTPHeaderField: "User-Agent")
 
         let (data, response) = try await BoundedJSONRequest.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -712,7 +712,7 @@ private struct OMDbMovieSearchService {
     private func performRequest<Response: Decodable>(_ url: URL, decoding type: Response.Type) async throws -> Response {
         var request = URLRequest(url: url)
         request.timeoutInterval = BoundedJSONRequest.timeoutInterval
-        request.setValue("MetaFetch/2.01", forHTTPHeaderField: "User-Agent")
+        request.setValue(AppBuildInfo.shortUserAgent, forHTTPHeaderField: "User-Agent")
 
         let (data, response) = try await BoundedJSONRequest.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -956,7 +956,7 @@ private struct WikimediaMovieSearchService {
         var request = URLRequest(url: url)
         request.timeoutInterval = BoundedJSONRequest.timeoutInterval
         request.setValue(
-            "MetaFetch/2.01 (macOS app for tagging MP4 movie files and TV episodes)",
+            AppBuildInfo.descriptiveUserAgent,
             forHTTPHeaderField: "User-Agent"
         )
 
@@ -1487,7 +1487,7 @@ private struct TVMazeSearchService {
         var request = URLRequest(url: url)
         request.timeoutInterval = BoundedJSONRequest.timeoutInterval
         request.setValue(
-            "MetaFetch/2.01 (macOS app for tagging MP4 movie files and TV episodes)",
+            AppBuildInfo.descriptiveUserAgent,
             forHTTPHeaderField: "User-Agent"
         )
 

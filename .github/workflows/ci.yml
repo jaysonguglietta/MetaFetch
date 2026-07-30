@@ -39,5 +39,7 @@ jobs:
       - name: Verify runtime app bundle
         run: ./Scripts/verify_app_bundle.sh dist/MetaFetch.app
 
-      - name: Check release DMG script syntax
-        run: zsh -n Scripts/build_release_dmg.sh
+      - name: Check release script syntax
+        run: |
+          zsh -n Scripts/build_release_dmg.sh
+          zsh -n Scripts/publish_release.sh

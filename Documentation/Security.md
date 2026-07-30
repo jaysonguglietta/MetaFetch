@@ -37,13 +37,13 @@ Sparkle 2.9.4 is pinned through SwiftPM. It is activated only when the signed bu
 The updater only accepts trusted GitHub release URLs and bounded installer assets. Every installer must have an exact-name SHA-256 sidecar, for example:
 
 ```text
-MetaFetch-2.01.dmg
-MetaFetch-2.01.dmg.sha256
+MetaFetch-2.02.dmg
+MetaFetch-2.02.dmg.sha256
 ```
 
 DMGs must also pass strict macOS code-signature validation. When the installed app has a Developer ID Team ID, the downloaded DMG must match that team. Installers are moved to Downloads and revealed in Finder; MetaFetch does not open or silently install them.
 
-Production releases should be Developer ID signed, notarized, stapled, and generated with `Scripts/build_release_dmg.sh` so the checksum filename matches the updater contract.
+Production releases must use `Scripts/publish_release.sh`. The publisher requires a clean `main` matching `origin/main`, a Developer ID Application identity, an authenticated notarization profile, and release notes. It builds the DMG through `Scripts/build_release_dmg.sh`, then verifies its code signature, notarization ticket, Gatekeeper assessment, and checksum before creating the GitHub Release. Missing prerequisites terminate the workflow before publication.
 
 ## Export And CI Safety
 
